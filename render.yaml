@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: bot-zalo-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bot-zalo-postgres
+          property: connectionString
+      - key: ZALO_BOT_TOKEN
+        sync: false
+      - key: SEPAY_API_KEY
+        sync: false
+      - key: SEPAY_BANK
+        value: BIDV
+      - key: SEPAY_ACCOUNT_NO
+        value: 96247IQFSF
+      - key: SEPAY_ACCOUNT_NAME
+        value: NGUYEN DOAN VAN SONG
+      - key: ADMIN_ZALO_IDS
+        value: 708a33343462dd3c8473
+
+databases:
+  - name: bot-zalo-postgres
+    databaseName: bot_zalo
+    user: root
+    plan: free
