@@ -125,7 +125,7 @@ def notify_groups_order_completed(db: Session, order: Order) -> int:
         f"📦 Sản phẩm: {order.product.product_name}",
         f"🔢 Số lượng: {order.quantity}",
         f"💰 Giá trị: {int(order.price):,} VNĐ",
-        f"⚡ Trạng thái: Đã tự động xuất kho & bàn giao tài khoản tức thì!\n",
+        "⚡ Trạng thái: Đã tự động xuất kho & bàn giao tài khoản tức thì!\n",
         "👉 Nhắn tin riêng cho Bot soạn 'MENU' để xem sản phẩm và mua tài khoản tự động 24/7 nhé! ✨"
     ]
     notice_msg = "\n".join(lines)

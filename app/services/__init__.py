@@ -25,6 +25,13 @@ from .group_service import (
     get_all_active_groups,
     notify_groups_order_completed,
 )
+from .vubel_email_service import (
+    find_user_stock_by_identifier,
+    add_email_to_shopee_account,
+    fetch_otp_from_email,
+    verify_shopee_email_link,
+)
+
 
 __all__ = [
     "send_zalo_message",
@@ -43,4 +50,9 @@ __all__ = [
     "register_or_update_group",
     "get_all_active_groups",
     "notify_groups_order_completed",
+    "find_user_stock_by_identifier",
+    "add_email_to_shopee_account",
+    "fetch_otp_from_email",
+    "verify_shopee_email_link",
 ]
+

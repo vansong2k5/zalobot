@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from app.config import SEPAY_API_KEY
 from app.db import get_db, SessionLocal
-from app.schemas import SepayWebhookPayload
 from app.services import (
     handle_zalo_user_message,
     process_sepay_payment,
@@ -167,10 +166,15 @@ async def zalo_webhook(
         or {}
     )
 
-    chat_type = chat_obj.get("type", "")
-    chat_title = chat_obj.get("title") or chat_obj.get("name")
-    raw_chat_id = chat_obj.get("id") or body.get("chat_id")
-    raw_user_id = from_user.get("id") or body.get("user_id_by_app")
+    chat_type = chat_obj.get("type", "") if isinstance(chat_obj, dict) else ""
+    chat_title = (chat_obj.get("title") or chat_obj.get("name")) if isinstance(chat_obj, dict) else None
+    raw_chat_id = (chat_obj.get("id") if isinstance(chat_obj, dict) else None) or body.get("chat_id")
+
+    if isinstance(from_user, dict):
+        raw_user_id = from_user.get("id") or body.get("user_id_by_app")
+    else:
+        raw_user_id = str(from_user) if from_user else body.get("user_id_by_app")
+
 
     # Nhận diện nếu sự kiện/tin nhắn xuất phát từ một nhóm (Group)
     # Zalo Bot định danh Group luôn bắt đầu bằng tiền tố 'zgr-' hoặc type='group'/'supergroup'

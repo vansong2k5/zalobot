@@ -12,13 +12,11 @@ from datetime import datetime
 from sqlalchemy import (
     Column,
     Integer,
-    BigInteger,
     String,
     Numeric,
     Text,
     DateTime,
     ForeignKey,
-    func
 )
 from sqlalchemy.orm import relationship
 from app.db import Base
@@ -101,6 +99,13 @@ class ProductStock(Base):
     status = Column(String(20), default="available", nullable=False, index=True)
     # Đã bán cho đơn hàng nào (khi status = 'sold')
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
+
+    # Thông tin Email & OTP liên kết (qua Vũ Bel API)
+    assigned_email = Column(String(255), nullable=True)
+    email_password = Column(String(255), nullable=True)
+    mail_status = Column(String(50), default="none", nullable=True)
+    last_otp = Column(String(50), nullable=True)
+    last_otp_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     sold_at = Column(DateTime, nullable=True)

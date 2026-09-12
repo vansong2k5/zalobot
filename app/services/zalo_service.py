@@ -70,7 +70,7 @@ def send_zalo_sticker(user_zalo_id: str, sticker_id: str) -> bool:
     Body: {"chatId": user_zalo_id, "sticker": sticker_id}
     """
     if not ZALO_BOT_TOKEN:
-        print(f"Bot tạm thời đang bảo trì. Chưa cấu hình ZALO_BOT_TOKEN để gửi sticker.")
+        print("Bot tạm thời đang bảo trì. Chưa cấu hình ZALO_BOT_TOKEN để gửi sticker.")
         return False
 
     url = f"https://bot-api.zaloplatforms.com/bot{ZALO_BOT_TOKEN}/sendSticker"

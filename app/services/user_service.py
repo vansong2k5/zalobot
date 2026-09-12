@@ -47,6 +47,14 @@ def get_or_create_user(db: Session, zalo_user_id: str, display_name: str) -> tup
 def is_admin_user(zalo_user_id: str) -> bool:
     """
     Kiểm tra tài khoản Zalo có thuộc danh sách Admin (ADMIN_ZALO_IDS) hay không.
+    So sánh an toàn, không phân biệt hoa thường và loại bỏ khoảng trắng thừa.
     """
-    return str(zalo_user_id).strip() in ADMIN_ZALO_IDS
+    if not zalo_user_id:
+        return False
+    clean_id = str(zalo_user_id).strip().lower()
+    for a_id in ADMIN_ZALO_IDS:
+        if a_id and str(a_id).strip().lower() == clean_id:
+            return True
+    return False
+
 

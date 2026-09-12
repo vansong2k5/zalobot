@@ -39,26 +39,39 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
     # =========================================================================
     if cmd in ["ADMIN", "ADMINHELP", "HELPADMIN", "QT"]:
         admin_menu = (
-            "👑 BẢNG ĐIỀU KHIỂN QUẢN TRỊ (ADMIN)\n"
-            "📊 THỐNG KÊ & DOANH THU:\n"
-            "• TK (hoặc THONGKE): Báo cáo doanh thu, đơn hàng, tồn kho.\n"
-            "• DONHANG: Xem 5 đơn hàng mới nhất.\n"
-            "• KHO: Xem số lượng tồn kho từng sản phẩm.\n\n"
-            "📦 QUẢN LÝ SẢN PHẨM & NẠP KHO:\n"
+            "👑 𝐁Ả𝐍𝐆 Đ𝐈Ề𝐔 𝐊𝐇𝐈Ể𝐍 𝐐𝐔Ả𝐍 𝐓𝐑Ị (𝐀𝐃𝐌𝐈𝐍) 👑\n"
+            "───────────────────────\n"
+            "📊 𝐁Á𝐎 𝐂Á𝐎 & 𝐓𝐇Ố𝐍𝐆 𝐊Ê:\n"
+            "• TK (hoặc THONGKE) ➔ Doanh thu, đơn hàng & tồn kho\n"
+            "• DONHANG (hoặc DH) ➔ Xem 5 đơn hàng mới nhất\n"
+            "• KHO ➔ Xem chi tiết tồn kho từng sản phẩm\n\n"
+            "📦 𝐐𝐔Ả𝐍 𝐋Ý 𝐒Ả𝐍 𝐏𝐇Ẩ𝐌 & 𝐍Ạ𝐏 𝐊𝐇𝐎:\n"
             "• THEMSP <Tên SP> | <Giá> [| <Mô tả>]\n"
-            "  VD: THEMSP Spotify 3 Tháng | 30000 | Bản quyền gia hạn chính chủ\n\n"
+            "  👉 VD: THEMSP Spotify 3 Tháng | 30000 | Bản quyền gia hạn chính chủ\n\n"
             "• THEMKHO <Mã SP> | <Tài khoản> | <Mật khẩu> [| SĐT] [| Cookie_F] [| Cookie_ST]\n"
-            "  VD: THEMKHO 2 | user01 | Pass123@ | 0912345678 | spc_f=xxx | spc_st=yyy\n\n"
-            "👥 QUẢN LÝ NHÓM (GROUP):\n"
-            "• GROUPS: Danh sách các nhóm bot đang tham gia\n"
-            "• ADDGROUP <Mã Nhóm> [| Tên Nhóm]: Thêm nhóm thủ công\n"
-            "• DELGROUP <Mã Nhóm>: Xóa nhóm nhận thông báo\n"
-            "• TESTGROUP: Gửi thử thông báo đơn hàng mẫu vào tất cả các nhóm\n\n"
-            "📢 GỬI THÔNG BÁO HÀNG LOẠT:\n"
-            "• BROADCAST <Nội dung>: Gửi đến TẤT CẢ Nhóm & Khách hàng\n"
-            "• TBGROUP <Nội dung>: Chỉ gửi riêng tới các Nhóm Zalo\n"
-            "• TBUSER <Nội dung>: Chỉ gửi riêng tới từng Khách hàng cá nhân\n"
-            "  VD: BROADCAST Kho vừa về thêm tài khoản Netflix giá siêu rẻ!"
+            "  👉 VD: THEMKHO 1 | user01 | Pass123@ | 0912345678 | spc_f=xxx | spc_st=yyy\n\n"
+            "💳 𝐐𝐔Ả𝐍 𝐋Ý 𝐕Í & 𝐍Ạ𝐏 𝐓𝐈Ề𝐍 𝐊𝐇Á𝐂𝐇 𝐇À𝐍𝐆:\n"
+            "• NAPTIEN <Mã Đơn hoặc Zalo ID> <Số tiền> [| Lý do]\n"
+            "  👉 Nạp tiền ví cho khách & tự động báo Zalo\n"
+            "  👉 VD: NAPTIEN 708a33... 50000 | Khách chuyển khoản nạp ví\n"
+            "  👉 VD: NAPTIEN DH100201 20000\n\n"
+            "• HOANTIEN <Mã Đơn hoặc Zalo ID> [Số tiền] [| Lý do]\n"
+            "  👉 Hoàn tiền lỗi đơn (Mặc định 10.000đ nếu bỏ trống số tiền)\n"
+            "  👉 VD: HOANTIEN DH100201 10000 | Hoàn tiền lỗi sim\n\n"
+            "• TRUTIEN <Mã Đơn hoặc Zalo ID> <Số tiền> [| Lý do]\n"
+            "  👉 Khấu trừ tiền ví của khách\n\n"
+            "• CHECKVI <Mã Đơn hoặc Zalo ID>\n"
+            "  👉 Xem nhanh số dư ví & thông tin khách hàng\n\n"
+            "📢 𝐓𝐇Ô𝐍𝐆 𝐁Á𝐎 𝐇À𝐍𝐆 𝐋𝐎Ạ𝐓:\n"
+            "• TB <Nội dung> ➔ Gửi tới TẤT CẢ Nhóm Zalo\n"
+            "• TBUSER <Nội dung> ➔ Gửi riêng tới từng Khách hàng cá nhân\n\n"
+            "👥 𝐐𝐔Ả𝐍 𝐋Ý 𝐍𝐇Ó𝐌 𝐙𝐀𝐋𝐎:\n"
+            "• GROUPS ➔ Xem danh sách nhóm bot đang tham gia\n"
+            "• ADDGROUP <Mã Nhóm> [| Tên Nhóm] ➔ Thêm nhóm thủ công\n"
+            "• DELGROUP <Mã Nhóm> ➔ Xóa nhóm nhận thông báo\n"
+            "• TESTGROUP ➔ Bắn thử thông báo test vào tất cả nhóm\n"
+            "───────────────────────\n"
+            "💡 Mẹo: Chạm giữ tin nhắn để sao chép cú pháp mẫu nhanh!"
         )
         send_zalo_message(zalo_user_id, admin_menu)
         return True
@@ -87,15 +100,19 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
         sold_stock = db.query(ProductStock).filter(ProductStock.status == "sold").count()
 
         report = (
-            "📊 BÁO CÁO THỐNG KÊ DOANH THU & KHO HÀNG\n"
+            "📊 𝐁Á𝐎 𝐂Á𝐎 𝐊𝐈𝐍𝐇 𝐃𝐎𝐀𝐍𝐇 & 𝐓Ồ𝐍 𝐊𝐇𝐎 📊\n"
+            "───────────────────────\n"
+            f"💰 Doanh thu hôm nay: {int(today_revenue):,} VNĐ ({len(today_completed)} đơn thành công)\n"
+            f"💎 Tổng doanh thu toàn sàn: {int(total_revenue):,} VNĐ\n"
+            "───────────────────────\n"
+            f"🛒 Tổng đơn hàng đã tạo: {total_orders} đơn\n"
+            f"✅ Đơn hoàn thành: {len(completed_orders)} đơn\n"
             f"👥 Tổng khách hàng: {total_users} người\n"
-            f"🛒 Tổng đơn hàng: {total_orders} đơn ({len(completed_orders)} đơn thành công)\n"
-            f"💰 Doanh thu hôm nay: {int(today_revenue):,} VNĐ ({len(today_completed)} đơn)\n"
-            f"💎 Tổng doanh thu toàn thời gian: {int(total_revenue):,} VNĐ\n"
-            f"📦 Tình trạng kho hàng:\n"
-            f"• Còn sẵn trong kho: {available_stock} tài khoản\n"
-            f"• Đã bán thành công: {sold_stock} tài khoản\n"
-            f"• Tổng đã nhập: {total_stock} tài khoản"
+            "───────────────────────\n"
+            "📦 TÌNH TRẠNG KHO VẬT LÝ (ProductStock):\n"
+            f"• 🟢 Còn sẵn: {available_stock} tài khoản\n"
+            f"• 🔴 Đã bán: {sold_stock} tài khoản\n"
+            f"• 📥 Tổng đã nạp: {total_stock} tài khoản"
         )
         send_zalo_message(zalo_user_id, report)
         return True
@@ -104,29 +121,39 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
     # 3. XEM TỒN KHO CHI TIẾT (KHO)
     # =========================================================================
     if cmd in ["KHO", "STOCK", "TONKHO"]:
-        products = db.query(Product).all()
+        products = db.query(Product).order_by(Product.id.asc()).all()
         if not products:
             send_zalo_message(zalo_user_id, "📦 Hiện chưa có sản phẩm nào trong hệ thống.")
             return True
 
         lines = [
-            "📦 CHI TIẾT TỒN KHO TỪNG SẢN PHẨM\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "📦 𝐂𝐇𝐈 𝐓𝐈Ế𝐓 𝐓Ồ𝐍 𝐊𝐇𝐎 𝐓Ừ𝐍𝐆 𝐒Ả𝐍 𝐏𝐇Ẩ𝐌\n"
+            "───────────────────────"
         ]
         for p in products:
-            avail = db.query(ProductStock).filter(
-                ProductStock.product_id == p.id,
-                ProductStock.status == "available"
-            ).count()
-            sold = db.query(ProductStock).filter(
-                ProductStock.product_id == p.id,
-                ProductStock.status == "sold"
-            ).count()
-            status_text = "Đang bán" if p.status == "active" else "Tạm dừng"
-            lines.append(f"• [MÃ {p.id}] {p.product_name} ({int(p.price):,}đ - {status_text})")
-            lines.append(f"  👉 Còn: {avail} | Đã bán: {sold}")
+            p_lower = p.product_name.lower()
+            is_auto = (p.id in [3, 5, 6, 7]) or ("drive" in p_lower) or ("thuê sim" in p_lower) or ("highlands" in p_lower) or ("otp" in p_lower)
 
-        lines.append("💡 Để nạp thêm kho, soạn: THEMKHO <Mã SP> | <TK> | <MK>")
+            if is_auto:
+                status_text = "🟢 Sẵn sàng 24/7 (Cấp tự động)"
+                lines.append(f"• [{p.id}] {p.product_name} ➔ {int(p.price):,}đ")
+                lines.append(f"  └ {status_text}\n")
+            else:
+                avail = db.query(ProductStock).filter(
+                    ProductStock.product_id == p.id,
+                    ProductStock.status == "available"
+                ).count()
+                sold = db.query(ProductStock).filter(
+                    ProductStock.product_id == p.id,
+                    ProductStock.status == "sold"
+                ).count()
+                status_icon = "🟢" if avail > 0 else "🔴"
+                lines.append(f"• [{p.id}] {p.product_name} ➔ {int(p.price):,}đ")
+                lines.append(f"  └ {status_icon} Còn: {avail} acc | Đã bán: {sold} acc\n")
+
+        lines.append("───────────────────────")
+        lines.append("💡 Cú pháp nạp kho nhanh:")
+        lines.append("THEMKHO <Mã SP> | <Nick> | <Pass>")
         send_zalo_message(zalo_user_id, "\n".join(lines))
         return True
 
@@ -140,7 +167,8 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
             return True
 
         lines = [
-            "🛒 5 ĐƠN HÀNG MỚI NHẤT\n"
+            "🛒 𝟓 ĐƠ𝐍 𝐇À𝐍𝐆 𝐌Ớ𝐈 𝐍𝐇Ấ𝐓\n"
+            "───────────────────────"
         ]
         status_map = {
             "pending": "⏳ Chờ thanh toán",
@@ -152,8 +180,9 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
             st = status_map.get(o.status, o.status)
             c_name = o.user.display_name if o.user else "Khách"
             p_name = o.product.product_name if o.product else "Sản phẩm"
-            lines.append(f"• #{o.order_code} | {p_name} x{o.quantity}")
-            lines.append(f"  Khách: {c_name} | Tiền: {int(o.price):,}đ | {st}")
+            time_str = o.created_at.strftime("%H:%M %d/%m") if o.created_at else ""
+            lines.append(f"• #{o.order_code} ({time_str}) ➔ {st}")
+            lines.append(f"  └ {p_name} x{o.quantity} | {int(o.price):,}đ | Khách: {c_name}\n")
 
         send_zalo_message(zalo_user_id, "\n".join(lines))
         return True
@@ -432,9 +461,9 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
 
         test_content = (
             "🎉KHÁCH HÀNG VỪA MUA HÀNG THÀNH CÔNG! 🛍️\n"
-            "👤 Khách hàng: Nguyễn V*** S***\n"
+            "👤 Khách hàng: V*** S***\n"
             "📦 Sản phẩm: Shopee New (Cookie SPC_F + SPC_ST) x1\n"
-            "💰 Giá trị: 8,000 VNĐ\n"
+            "💰 Giá trị: 6,000 VNĐ\n"
             "⚡ Trạng thái: Đã tự động xuất kho & bàn giao tài khoản tức thì!\n"
             "👉 Nhắn tin riêng cho Bot soạn 'MENU' để xem sản phẩm và mua tài khoản tự động 24/7 nhé! ✨"
         )
@@ -452,5 +481,221 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
         )
         return True
 
+    # =========================================================================
+    # 12. NẠP TIỀN / CỘNG TIỀN VÍ KHÁCH HÀNG (NAPTIEN / CONGTIEN / TOPUP)
+    # =========================================================================
+    if cmd in ["NAPTIEN", "CONGTIEN", "TOPUP"]:
+        if len(parts) < 3:
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Cú pháp nạp tiền ví:\n"
+                "• NAPTIEN <Zalo ID hoặc Mã Đơn> <Số tiền> [| Lý do]\n"
+                "  👉 VD: NAPTIEN 708a33... 50000 | Khách chuyển khoản nạp ví\n"
+                "  👉 VD: NAPTIEN DH100201 20000"
+            )
+            return True
+
+        target_ref = parts[1].strip()
+        try:
+            amount = float(parts[2].replace(",", "").replace(".", ""))
+        except ValueError:
+            send_zalo_message(zalo_user_id, "❌ Số tiền nạp không hợp lệ! Phải là số, ví dụ: 50000")
+            return True
+
+        # Tách lý do nếu có
+        reason = "Nạp tiền ví Zalo"
+        if "|" in raw_text:
+            reason = raw_text.split("|", 1)[1].strip() or reason
+        elif len(parts) >= 4:
+            reason = " ".join(parts[3:]).strip()
+
+        target_user = None
+        clean_code = target_ref.upper()
+        order = db.query(Order).filter(Order.order_code == clean_code).first()
+        if order and order.user:
+            target_user = order.user
+        else:
+            target_user = db.query(User).filter(User.user_id == target_ref).first()
+
+        if not target_user:
+            send_zalo_message(zalo_user_id, f"❌ Không tìm thấy khách hàng hoặc đơn hàng: '{target_ref}'")
+            return True
+
+        old_bal = float(target_user.balance or 0.0)
+        target_user.balance = old_bal + amount
+        db.commit()
+
+        # Gửi tin nhắn Zalo chúc mừng nạp tiền thành công cho khách
+        customer_msg = (
+            f"💳 BẠN ĐÃ ĐƯỢC NẠP TIỀN VÀO VÍ THÀNH CÔNG! ✨🎉\n"
+            f"───────────────────────\n"
+            f"💵 Số tiền nạp: +{int(amount):,} VNĐ\n"
+            f"📌 Nội dung: {reason}\n"
+            f"💼 Số dư ví hiện tại: {int(target_user.balance):,} VNĐ\n"
+            f"───────────────────────\n"
+            f"⚡ TIỆN ÍCH DÀNH CHO BẠN:\n"
+            f"• Bạn có thể dùng số dư này mua bất kỳ dịch vụ nào trên bot.\n"
+            f"• Khi soạn lệnh mua (Ví dụ: 'BUY 6' hoặc số '1'), hệ thống sẽ TỰ ĐỘNG TRỪ VÍ và nhả số/acc tức thì!\n\n"
+            f"👉 Soạn 'MENU' để xem danh sách dịch vụ sẵn hàng nhé! ✨"
+        )
+        send_zalo_message(target_user.user_id, customer_msg)
+
+        send_zalo_message(
+            zalo_user_id,
+            f"✅ ĐÃ NẠP TIỀN VÍ THÀNH CÔNG!\n"
+            f"───────────────────────\n"
+            f"👤 Khách hàng: {target_user.display_name} ({target_user.user_id})\n"
+            f"💰 Số tiền nạp: +{int(amount):,} VNĐ\n"
+            f"💼 Số dư cũ: {int(old_bal):,}đ ➔ Số dư mới: {int(target_user.balance):,}đ\n"
+            f"📩 Đã gửi tin nhắn thông báo tự động tới Zalo khách hàng!"
+        )
+        return True
+
+    # =========================================================================
+    # 13. HOÀN TIỀN LỖI ĐƠN HÀNG (HOANTIEN / REFUND)
+    # =========================================================================
+    if cmd in ["HOANTIEN", "REFUND"]:
+        if len(parts) < 2:
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Cú pháp hoàn tiền:\n"
+                "• HOANTIEN <Mã Đơn hoặc Zalo ID> [Số tiền] [| Lý do]\n"
+                "  👉 VD: HOANTIEN DH100201 10000 | Hoàn tiền lỗi thuê sim\n"
+                "  (Mặc định 10.000đ nếu không nhập số tiền)"
+            )
+            return True
+
+        target_ref = parts[1].strip()
+        amount = 10000.0
+        if len(parts) >= 3 and not parts[2].startswith("|"):
+            try:
+                amount = float(parts[2].replace(",", "").replace(".", ""))
+            except ValueError:
+                amount = 10000.0
+
+        reason = "Hoàn tiền dịch vụ Thuê SIM OTP"
+        if "|" in raw_text:
+            reason = raw_text.split("|", 1)[1].strip() or reason
+
+        target_user = None
+        clean_code = target_ref.upper()
+        order = db.query(Order).filter(Order.order_code == clean_code).first()
+        if order and order.user:
+            target_user = order.user
+        else:
+            target_user = db.query(User).filter(User.user_id == target_ref).first()
+
+        if not target_user:
+            send_zalo_message(zalo_user_id, f"❌ Không tìm thấy khách hàng hoặc đơn hàng: '{target_ref}'")
+            return True
+
+        old_bal = float(target_user.balance or 0.0)
+        target_user.balance = old_bal + amount
+        db.commit()
+
+        customer_msg = (
+            f"🎁 BẠN ĐÃ ĐƯỢC HOÀN TIỀN VÀO VÍ! 💰✨\n"
+            f"───────────────────────\n"
+            f"💵 Số tiền hoàn: +{int(amount):,} VNĐ\n"
+            f"📌 Lý do: {reason}\n"
+            f"💼 Số dư ví hiện tại: {int(target_user.balance):,} VNĐ\n"
+            f"───────────────────────\n"
+            f"👉 Bạn có thể soạn 'BUY 6' để thuê số Shopee ngay tức thì bằng số dư ví mà không cần quét mã QR nữa nhé! ✨"
+        )
+        send_zalo_message(target_user.user_id, customer_msg)
+
+        send_zalo_message(
+            zalo_user_id,
+            f"✅ ĐÃ HOÀN TIỀN THÀNH CÔNG!\n"
+            f"───────────────────────\n"
+            f"👤 Khách hàng: {target_user.display_name} ({target_user.user_id})\n"
+            f"💰 Số tiền hoàn: +{int(amount):,} VNĐ\n"
+            f"💼 Số dư cũ: {int(old_bal):,}đ ➔ Số dư mới: {int(target_user.balance):,}đ\n"
+            f"📩 Đã gửi tin nhắn thông báo tự động tới Zalo khách hàng!"
+        )
+        return True
+
+    # =========================================================================
+    # 14. KHẤU TRỪ TIỀN VÍ KHÁCH HÀNG (TRUTIEN)
+    # =========================================================================
+    if cmd in ["TRUTIEN", "DEDUCT"]:
+        if len(parts) < 3:
+            send_zalo_message(zalo_user_id, "⚠️ Cú pháp: TRUTIEN <Mã Đơn hoặc Zalo ID> <Số tiền> [| Lý do]")
+            return True
+
+        target_ref = parts[1].strip()
+        try:
+            amount = float(parts[2].replace(",", "").replace(".", ""))
+        except ValueError:
+            send_zalo_message(zalo_user_id, "❌ Số tiền trừ không hợp lệ!")
+            return True
+
+        reason = "Khấu trừ số dư ví"
+        if "|" in raw_text:
+            reason = raw_text.split("|", 1)[1].strip() or reason
+
+        target_user = None
+        clean_code = target_ref.upper()
+        order = db.query(Order).filter(Order.order_code == clean_code).first()
+        if order and order.user:
+            target_user = order.user
+        else:
+            target_user = db.query(User).filter(User.user_id == target_ref).first()
+
+        if not target_user:
+            send_zalo_message(zalo_user_id, f"❌ Không tìm thấy người dùng: '{target_ref}'")
+            return True
+
+        old_bal = float(target_user.balance or 0.0)
+        target_user.balance = max(0.0, old_bal - amount)
+        db.commit()
+
+        send_zalo_message(
+            zalo_user_id,
+            f"✅ ĐÃ KHẤU TRỪ TIỀN VÍ THÀNH CÔNG!\n"
+            f"───────────────────────\n"
+            f"👤 Khách: {target_user.display_name} ({target_user.user_id})\n"
+            f"💸 Số tiền trừ: -{int(amount):,} VNĐ\n"
+            f"💼 Số dư cũ: {int(old_bal):,}đ ➔ Số dư mới: {int(target_user.balance):,}đ"
+        )
+        return True
+
+    # =========================================================================
+    # 15. TRA CỨU SỐ DƯ VÍ CỦA KHÁCH HÀNG (CHECKVI)
+    # =========================================================================
+    if cmd in ["CHECKVI", "VIUSER", "XEMVI"]:
+        if len(parts) < 2:
+            send_zalo_message(zalo_user_id, "⚠️ Cú pháp: CHECKVI <Mã Đơn hoặc Zalo ID>")
+            return True
+
+        target_ref = parts[1].strip()
+        target_user = None
+        clean_code = target_ref.upper()
+        order = db.query(Order).filter(Order.order_code == clean_code).first()
+        if order and order.user:
+            target_user = order.user
+        else:
+            target_user = db.query(User).filter(User.user_id == target_ref).first()
+
+        if not target_user:
+            send_zalo_message(zalo_user_id, f"❌ Không tìm thấy thông tin khách hàng: '{target_ref}'")
+            return True
+
+        orders_cnt = db.query(Order).filter(Order.user_id == target_user.id).count()
+        completed_cnt = db.query(Order).filter(Order.user_id == target_user.id, Order.status == "completed").count()
+
+        send_zalo_message(
+            zalo_user_id,
+            f"💼 THÔNG TIN VÍ KHÁCH HÀNG:\n"
+            f"───────────────────────\n"
+            f"👤 Tên hiển thị: {target_user.display_name}\n"
+            f"🆔 Zalo ID: {target_user.user_id}\n"
+            f"💰 Số dư ví khả dụng: {int(target_user.balance or 0):,} VNĐ\n"
+            f"🛒 Đơn đã mua: {completed_cnt}/{orders_cnt} đơn thành công\n"
+            f"⏰ Tham gia: {target_user.created_at.strftime('%H:%M %d/%m/%Y')}"
+        )
+        return True
+
     return False
+
 

@@ -21,9 +21,11 @@ DATABASE_URL = os.getenv(
     "postgresql://root:root@localhost:5432/bot_zalo"
 )
 
-# Chuyển đổi định dạng URL nếu lỡ dùng cú pháp asyncpg cũ
+# Chuyển đổi định dạng URL nếu dùng cú pháp cũ của Render/Heroku/Supabase
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 if DATABASE_URL.startswith("postgresql+asyncpg://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 # --- 2. Zalo Bot Platform ---
 # Token bot từ Zalo Bot Creator
@@ -53,4 +55,15 @@ ZALO_GROUP_IDS = [
     x.strip() for x in os.getenv("ZALO_GROUP_IDS", "").split(",") if x.strip()
 ]
 
+# --- 7. Vũ Bel API (https://api.vubel.store) & Hòm Thư Ảo ---
+VUBEL_API_BASE = os.getenv("VUBEL_API_BASE", "https://api.vubel.store").strip().rstrip("/")
+VUBEL_API_KEY = os.getenv("VUBEL_API_KEY", "vubel_0ad7828dd54516eedcebc148456f2d20").strip()
+DEFAULT_PROXY = os.getenv("DEFAULT_PROXY", "http://163.61.183.185:8888").strip()
+PROXY_LIST = [
+    p.strip() for p in os.getenv("PROXY_LIST", "").split(",") if p.strip()
+]
 
+# --- 8. ViOTP API (Thuê SIM nhận mã OTP) ---
+VIOTP_TOKEN = os.getenv("VIOTP_TOKEN", "").strip()
+# Mặc định Service ID 20 = Grab (giá rẻ 3k) hoặc lấy theo cấu hình .env
+VIOTP_SERVICE_ID = int(os.getenv("VIOTP_SERVICE_ID", "20"))
