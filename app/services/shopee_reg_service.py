@@ -1,15 +1,18 @@
 """
-Module Shopee Registration Service - Tự động hóa đăng ký tài khoản Shopee chuẩn Vũ Bel:
-1. Yêu cầu Proxy người dùng cung cấp & kiểm tra kết nối độc lập
-2. Thuê số điện thoại (Số Grab ID: 20 hoặc Shopee ID: 4 từ ViOTP)
-3. Nhập số & Giải Captcha trượt (Slider Puzzle) bằng OpenCV & Human-like mouse
-4. Hứng OTP tự động từ ViOTP
+Module Shopee Registration Service - Tự động hóa đăng ký tài khoản Shopee:
+1. Validate Proxy của người dùng trước khi thực hiện bất kỳ thao tác nào.
+2. Thuê số điện thoại đúng Service Shopee (ID: 1, giá 1.000đ) từ ViOTP.
+3. Nhập số & Giải Captcha trượt (Slider Puzzle) bằng OpenCV & Human-like mouse.
+4. Hứng OTP tự động từ ViOTP hoặc chờ khách nhập OTP (nếu dùng SĐT riêng).
 5. XỬ LÝ LINH HOẠT CẢ 2 TRƯỜNG HỢP:
    - Số cũ đã đăng ký: Bấm 'Reclaim Phone Number' chiếm lại số để tạo acc mới tinh.
    - Số mới tinh chưa từng đăng ký: Tự động chuyển thẳng sang màn hình đặt mật khẩu.
 6. Đặt mật khẩu an toàn & Thu hoạch Full Cookies (SPC_ST, SPC_F, SPC_U).
 7. Ghi Log chi tiết vào CSDL (bảng shopee_reg_logs) và file logs/shopee_reg.log.
 8. Đa luồng (Multi-worker Semaphore) an toàn, chống nghẽn VPS.
+
+NOTE: VIOTP Service ID chuẩn cho Shopee = 1 (giá 1.000đ/số).
+      KHÔNG dùng ID 20 (Grab) vì SIM Grab không nhận SMS từ Shopee.
 """
 
 import os
@@ -65,11 +68,12 @@ class ShopeeRegService:
         self,
         user_proxy: str,
         zalo_user_id: str = "",
-        service_id: int = 20,
+        service_id: int = 1,
         provided_phone: Optional[str] = None,
         custom_password: Optional[str] = None,
         acc_prefix: str = "",
-        progress_callback: Optional[Callable[[str], Any]] = None
+        progress_callback: Optional[Callable[[str], Any]] = None,
+        headless: bool = True
     ) -> Dict[str, Any]:
         """
         Quy trình đăng ký tài khoản Shopee tự động:
@@ -186,7 +190,7 @@ class ShopeeRegService:
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
-                    headless=True,
+                    headless=headless,
                     proxy=pw_proxy,
                     args=[
                         "--disable-blink-features=AutomationControlled",
@@ -194,6 +198,7 @@ class ShopeeRegService:
                         "--disable-dev-shm-usage"
                     ]
                 )
+                log_step(f"[DEBUG] Browser launched: headless={headless}, service_id={service_id}")
 
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
