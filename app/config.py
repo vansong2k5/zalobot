@@ -30,6 +30,7 @@ if DATABASE_URL.startswith("postgresql+asyncpg://"):
 # --- 2. Zalo Bot Platform ---
 # Token bot từ Zalo Bot Creator
 ZALO_BOT_TOKEN = os.getenv("ZALO_BOT_TOKEN", "")
+LOG_BOT_TOKEN = os.getenv("LOG_BOT_TOKEN", "1829149369477089735:SvyQYPFJWGVhqOJkcAHUFTljTeuhbTJgeBtuZgBHHmptqAjxOdxqLXeyLtrxxrng").strip()
 
 # --- 3. Cổng thanh toán Sepay (https://my.sepay.vn/webhooks) ---
 # API key bảo vệ webhook cấu hình trên Sepay
@@ -58,12 +59,12 @@ ZALO_GROUP_IDS = [
 # --- 7. Vũ Bel API (https://api.vubel.store) & Hòm Thư Ảo ---
 VUBEL_API_BASE = os.getenv("VUBEL_API_BASE", "https://api.vubel.store").strip().rstrip("/")
 VUBEL_API_KEY = os.getenv("VUBEL_API_KEY", "vubel_0ad7828dd54516eedcebc148456f2d20").strip()
-DEFAULT_PROXY = os.getenv("DEFAULT_PROXY", "http://163.61.183.185:8888").strip()
+DEFAULT_PROXY = os.getenv("DEFAULT_PROXY", "http://163.61.183.185:38888").strip()
 PROXY_LIST = [
     p.strip() for p in os.getenv("PROXY_LIST", "").split(",") if p.strip()
 ]
 
 # --- 8. ViOTP API (Thuê SIM nhận mã OTP) ---
 VIOTP_TOKEN = os.getenv("VIOTP_TOKEN", "").strip()
-# Mặc định Service ID 20 = Grab (giá rẻ 3k) hoặc lấy theo cấu hình .env
-VIOTP_SERVICE_ID = int(os.getenv("VIOTP_SERVICE_ID", "20"))
+# Mặc định Service ID 4 = Shopee / ShopeePay (5k) chuẩn nhận OTP Shopee
+VIOTP_SERVICE_ID = int(os.getenv("VIOTP_SERVICE_ID", "4"))

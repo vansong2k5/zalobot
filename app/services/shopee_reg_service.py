@@ -1,18 +1,15 @@
 """
-Module Shopee Registration Service - Tự động hóa đăng ký tài khoản Shopee:
-1. Validate Proxy của người dùng trước khi thực hiện bất kỳ thao tác nào.
-2. Thuê số điện thoại đúng Service Shopee (ID: 1, giá 1.000đ) từ ViOTP.
-3. Nhập số & Giải Captcha trượt (Slider Puzzle) bằng OpenCV & Human-like mouse.
-4. Hứng OTP tự động từ ViOTP hoặc chờ khách nhập OTP (nếu dùng SĐT riêng).
+Module Shopee Registration Service - Tự động hóa đăng ký tài khoản Shopee chuẩn Vũ Bel:
+1. Yêu cầu Proxy người dùng cung cấp & kiểm tra kết nối độc lập
+2. Thuê số điện thoại (Số Grab ID: 20 hoặc Shopee ID: 4 từ ViOTP)
+3. Nhập số & Giải Captcha trượt (Slider Puzzle) bằng OpenCV & Human-like mouse
+4. Hứng OTP tự động từ ViOTP
 5. XỬ LÝ LINH HOẠT CẢ 2 TRƯỜNG HỢP:
    - Số cũ đã đăng ký: Bấm 'Reclaim Phone Number' chiếm lại số để tạo acc mới tinh.
    - Số mới tinh chưa từng đăng ký: Tự động chuyển thẳng sang màn hình đặt mật khẩu.
 6. Đặt mật khẩu an toàn & Thu hoạch Full Cookies (SPC_ST, SPC_F, SPC_U).
 7. Ghi Log chi tiết vào CSDL (bảng shopee_reg_logs) và file logs/shopee_reg.log.
 8. Đa luồng (Multi-worker Semaphore) an toàn, chống nghẽn VPS.
-
-NOTE: VIOTP Service ID chuẩn cho Shopee = 1 (giá 1.000đ/số).
-      KHÔNG dùng ID 20 (Grab) vì SIM Grab không nhận SMS từ Shopee.
 """
 
 import os
@@ -68,12 +65,12 @@ class ShopeeRegService:
         self,
         user_proxy: str,
         zalo_user_id: str = "",
-        service_id: int = 1,
+        service_id: int = 4,
         provided_phone: Optional[str] = None,
         custom_password: Optional[str] = None,
         acc_prefix: str = "",
-        progress_callback: Optional[Callable[[str], Any]] = None,
-        headless: bool = True
+        headless: Optional[bool] = None,
+        progress_callback: Optional[Callable[[str], Any]] = None
     ) -> Dict[str, Any]:
         """
         Quy trình đăng ký tài khoản Shopee tự động:
@@ -188,17 +185,27 @@ class ShopeeRegService:
             target_password = custom_password or generate_secure_password(12)
             extracted_account = {}
 
+            is_headless = headless if headless is not None else (os.getenv("SHOPEE_HEADLESS", "false").strip().lower() in ("true", "1", "yes"))
+
+            launch_kwargs = {
+                "headless": is_headless,
+                "proxy": pw_proxy,
+                "args": [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
+            }
+            if os.name == "nt":
+                launch_kwargs["channel"] = "chrome"
+
             async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=headless,
-                    proxy=pw_proxy,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage"
-                    ]
-                )
-                log_step(f"[DEBUG] Browser launched: headless={headless}, service_id={service_id}")
+                try:
+                    browser = await p.chromium.launch(**launch_kwargs)
+                except Exception:
+                    # Fallback nếu máy không có Chrome
+                    launch_kwargs.pop("channel", None)
+                    browser = await p.chromium.launch(**launch_kwargs)
 
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",

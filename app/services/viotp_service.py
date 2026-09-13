@@ -10,7 +10,7 @@ import time
 import logging
 import threading
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 import httpx
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,7 @@ def request_phone_number(service_id: int = None, network: str = None) -> Dict[st
         logger.error("Chưa cấu hình VIOTP_TOKEN trong hệ thống.")
         return {"ok": False, "error": "Hệ thống thuê số tạm thời đang nâng cấp. Vui lòng thử lại sau!"}
 
-    target_service = service_id or VIOTP_SERVICE_ID or 20
+    target_service = service_id or VIOTP_SERVICE_ID or 4
     url = f"{VIOTP_BASE_URL}/request/getv2"
     params = {
         "token": token,
@@ -49,18 +49,25 @@ def request_phone_number(service_id: int = None, network: str = None) -> Dict[st
             data = resp.json()
             if data.get("status_code") == 200 and data.get("data"):
                 r_data = data["data"]
+                # Ưu tiên re_phone_number có sẵn số 0 ở đầu (ví dụ 0523047231)
+                full_phone = r_data.get("re_phone_number") or r_data.get("phone_number") or ""
+                if full_phone and not full_phone.startswith("0") and len(full_phone) == 9:
+                    full_phone = "0" + full_phone
+
+                req_id = r_data.get("request_id")
                 return {
                     "ok": True,
-                    "request_id": r_data.get("request_id"),
-                    "phone_number": r_data.get("phone_number"),
+                    "request_id": req_id,
+                    "phone_number": full_phone,
+                    "phone": full_phone,
                     "balance": r_data.get("balance"),
                     "network": network or "Auto"
                 }
-            err_msg = data.get("message") or "Hệ thống đang tạm hết số sạch lúc này. Vui lòng thử lại sau 2 phút!"
+            err_msg = data.get("message") or "Hệ thống đang kết nối đầu số mới. Vui lòng thử lại sau 1-2 phút!"
             return {"ok": False, "error": err_msg}
     except Exception as ex:
-        logger.error("Lỗi kết nối ViOTP request_phone_number: %s", ex)
-        return {"ok": False, "error": "Lỗi kết nối máy chủ cấp số. Vui lòng thử lại sau ít phút!"}
+        logger.error("Lỗi kết nối request_phone_number: %s", ex)
+        return {"ok": False, "error": "Hệ thống cấp số tạm thời bận. Vui lòng thử lại sau ít phút!"}
 
 
 def request_highlands_phone() -> Dict[str, Any]:
@@ -252,3 +259,94 @@ def start_otp_polling(
         daemon=True
     )
     thread.start()
+class ViOTPService:
+    def __init__(self, token: Optional[str] = None):
+        self.token = (token or VIOTP_TOKEN).strip()
+
+    def get_balance(self) -> Tuple[bool, int, str]:
+        """Lấy số dư tài khoản thuê SIM."""
+        if not self.token:
+            return False, 0, "Chưa cấu hình tài khoản hệ thống."
+        try:
+            url = f"{VIOTP_BASE_URL}/users/balance?token={self.token}"
+            with httpx.Client(timeout=10.0) as client:
+                r = client.get(url).json()
+                if r.get("status_code") == 200:
+                    balance = int(r.get("data", {}).get("balance", 0))
+                    return True, balance, f"Số dư khả dụng: {balance:,} VNĐ"
+                return False, 0, r.get("message", "Lỗi kiểm tra số dư")
+        except Exception as e:
+            return False, 0, f"Lỗi kết nối máy chủ: {str(e)}"
+
+    def request_phone_number(self, service_id: Optional[int] = None, network: str = "") -> Tuple[bool, Optional[str], Optional[int], str]:
+        """
+        Cấp số điện thoại mới cho luồng Reg.
+        Trả về (success, phone_number, request_id, message)
+        """
+        res = request_phone_number(service_id=service_id, network=network)
+        if res.get("ok"):
+            phone = res.get("phone") or res.get("phone_number")
+            req_id = res.get("request_id")
+            return True, phone, req_id, f"Cấp số thành công: {phone}"
+        return False, None, None, res.get("error", "Không thể lấy số điện thoại lúc này.")
+
+    def poll_otp(self, request_id: int, timeout_seconds: int = 60, interval: int = 3) -> Tuple[bool, Optional[str], str]:
+        """
+        Lặp kiểm tra mã OTP trả về cho request_id.
+        """
+        if not self.token:
+            return False, None, "Chưa cấu hình mã kết nối hệ thống."
+
+        url = f"{VIOTP_BASE_URL}/session/getv2?token={self.token}&requestId={request_id}"
+        start_time = time.time()
+
+        with httpx.Client(timeout=8.0) as client:
+            while time.time() - start_time < timeout_seconds:
+                try:
+                    resp = client.get(url)
+                    res = resp.json()
+                    status = res.get("status_code")
+                    data = res.get("data", {})
+                    req_status = data.get("Status")
+
+                    if req_status == 1:
+                        otp_code = data.get("Code")
+                        sms_content = data.get("SmsContent", "")
+                        return True, str(otp_code), f"Nhận mã OTP thành công: {otp_code}"
+                    elif req_status == 2:
+                        return False, None, "Yêu cầu cấp mã đã hết hạn."
+
+                except Exception:
+                    pass
+
+                time.sleep(interval)
+
+        return False, None, f"Hết thời gian chờ mã OTP ({timeout_seconds}s)."
+
+
+def resume_pending_otp_polling():
+    """
+    Quét CSDL các đơn hàng status='pending' đang chờ OTP khi server khởi động lại để tiếp tục poll.
+    """
+    try:
+        from app.db import SessionLocal
+        from app.models import Order
+        db = SessionLocal()
+        pending_orders = db.query(Order).filter(Order.status == "pending").all()
+        for o in pending_orders:
+            # Bỏ qua các đơn quá cũ (> 10 phút)
+            diff = (datetime.utcnow() - o.created_at).total_seconds() if o.created_at else 9999
+            if diff < 300 and o.request_id and o.phone:
+                remain = max(30, int(300 - diff))
+                start_otp_polling(
+                    order_id=o.id,
+                    request_id=o.request_id,
+                    zalo_user_id=o.zalo_user_id or "",
+                    phone=o.phone,
+                    timeout_seconds=remain,
+                    service_title=o.product_title or "Shopee",
+                    app_name=o.product_title or "Shopee"
+                )
+        db.close()
+    except Exception as ex:
+        logger.warning(f"Lỗi resume pending OTP: {ex}")

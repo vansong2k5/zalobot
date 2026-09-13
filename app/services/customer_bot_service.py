@@ -749,11 +749,10 @@ def handle_zalo_user_message(
                             reg_srv.register_account(
                                 user_proxy=proxy_url,
                                 zalo_user_id=user_task_key,
-                                service_id=1,          # ViOTP ID=1 là Shopee (1.000đ) - ĐÚNG
+                                service_id=4,
                                 provided_phone=custom_phone,
                                 acc_prefix=acc_tag,
-                                progress_callback=notify_sync,
-                                headless=False          # Bật để quan sát trực tiếp trên VPS
+                                progress_callback=notify_sync
                             )
                         )
                     except Exception as loop_ex:
