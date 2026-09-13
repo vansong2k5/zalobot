@@ -24,6 +24,38 @@ logger = logging.getLogger("ViOtpService")
 VIOTP_BASE_URL = "https://api.viotp.com"
 
 
+def normalize_vietnamese_phone(phone: str) -> str:
+    """Chuẩn hóa số điện thoại Việt Nam về 10 chữ số chuẩn Shopee."""
+    import re
+    if not phone:
+        return ""
+    p = re.sub(r"\D", "", phone)
+    if p.startswith("84") and len(p) == 11:
+        p = "0" + p[2:]
+    elif not p.startswith("0") and len(p) == 9:
+        p = "0" + p
+
+    # Bản đồ chuyển đổi 11 số sang 10 số (Quy định Bộ TT&TT)
+    prefix_map = {
+        # Viettel (016x -> 03x)
+        "0162": "032", "0163": "033", "0164": "034", "0165": "035",
+        "0166": "036", "0167": "037", "0168": "038", "0169": "039",
+        # Mobifone (012x -> 07x)
+        "0120": "070", "0121": "079", "0122": "077", "0126": "076", "0128": "078",
+        # Vinaphone (012x -> 08x)
+        "0123": "083", "0124": "084", "0125": "085", "0127": "081", "0129": "082",
+        # Vietnamobile (018x -> 05x)
+        "0186": "056", "0188": "058",
+        # Gmobile
+        "0199": "059"
+    }
+    if len(p) == 11:
+        prefix4 = p[:4]
+        if prefix4 in prefix_map:
+            p = prefix_map[prefix4] + p[4:]
+    return p
+
+
 def request_phone_number(service_id: int = None, network: str = None) -> Dict[str, Any]:
     """
     Thuê số điện thoại mới từ ViOTP.
@@ -51,8 +83,7 @@ def request_phone_number(service_id: int = None, network: str = None) -> Dict[st
                 r_data = data["data"]
                 # Ưu tiên re_phone_number có sẵn số 0 ở đầu (ví dụ 0523047231)
                 full_phone = r_data.get("re_phone_number") or r_data.get("phone_number") or ""
-                if full_phone and not full_phone.startswith("0") and len(full_phone) == 9:
-                    full_phone = "0" + full_phone
+                full_phone = normalize_vietnamese_phone(full_phone)
 
                 req_id = r_data.get("request_id")
                 return {

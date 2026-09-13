@@ -185,7 +185,9 @@ class ShopeeRegService:
             target_password = custom_password or generate_secure_password(12)
             extracted_account = {}
 
-            is_headless = headless if headless is not None else (os.getenv("SHOPEE_HEADLESS", "false").strip().lower() in ("true", "1", "yes"))
+            is_headless = headless if headless is not None else (os.getenv("SHOPEE_HEADLESS", "true").strip().lower() in ("true", "1", "yes"))
+            if os.name != "nt" and "DISPLAY" not in os.environ:
+                is_headless = True
 
             launch_kwargs = {
                 "headless": is_headless,
@@ -233,11 +235,15 @@ class ShopeeRegService:
                         await browser.close()
                         return {"ok": False, "step": "stopped", "error": "Đã dừng tiến trình theo yêu cầu của bạn (Lệnh STOP).", "should_refund": True}
 
+                    from app.services.viotp_service import normalize_vietnamese_phone
+                    phone_num = normalize_vietnamese_phone(phone_num)
+
                     # Nhập số điện thoại
                     await notify(f"⌨️ [Giai đoạn 3/6] Đang nhập thông tin số điện thoại {phone_num}...", "3/6 Nhập SĐT")
                     phone_input = page.locator("input[name='phone'], input[placeholder*='Số điện thoại'], input[autocomplete='tel']").first
                     await phone_input.wait_for(state="visible", timeout=35000)
                     await phone_input.click()
+                    await phone_input.fill("")
 
                     for ch in phone_num:
                         await phone_input.type(ch, delay=random.randint(60, 140))
@@ -245,8 +251,27 @@ class ShopeeRegService:
 
                     await asyncio.sleep(1)
 
-                    # Bấm NEXT
+                    # Bấm NEXT (kiểm tra trạng thái enabled trước)
                     next_btn = page.locator("button:has-text('TIẾP THEO'), button:has-text('Tiếp theo'), button:has-text('NEXT')").first
+                    is_btn_ready = False
+                    for _ in range(6):
+                        if await next_btn.count() > 0 and await next_btn.is_enabled():
+                            is_btn_ready = True
+                            break
+                        await asyncio.sleep(0.5)
+
+                    if not is_btn_ready:
+                        err_text = "Số điện thoại không hợp lệ hoặc bị khóa đăng ký"
+                        try:
+                            error_loc = page.locator(".shopee-input-helper-text, [class*='error-message'], [class*='errorMessage']").first
+                            if await error_loc.count() > 0 and await error_loc.is_visible():
+                                err_text = (await error_loc.inner_text()).strip()
+                        except Exception:
+                            pass
+                        await browser.close()
+                        self._update_db_log(record_id, status="failed", step_failed="phone_reject", error_msg=err_text, logs=timeline_logs)
+                        return {"ok": False, "step": "phone_reject", "error": f"❌ Shopee thông báo: {err_text}", "should_refund": True}
+
                     await next_btn.click()
                     await asyncio.sleep(3)
 
