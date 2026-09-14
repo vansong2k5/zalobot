@@ -24,7 +24,7 @@ from playwright.async_api import async_playwright
 
 from app.db import SessionLocal
 from app.models import ShopeeRegLog, User, UserIdentity, UserProxy
-from app.services.proxy_validator import validate_proxy_connection
+from app.services.proxy_service import validate_proxy_connection
 from app.services.viotp_service import ViOTPService
 from app.services.captcha_solver_service import solve_shopee_slider_captcha, handle_shopee_verification_gate
 
@@ -361,14 +361,24 @@ class ShopeeRegService:
                         await next_btn.click()
                         await asyncio.sleep(3)
 
-                        # Kiểm tra xem Shopee có báo lỗi số điện thoại không
+                        # Kiểm tra xem Shopee có báo lỗi số điện thoại hoặc chặn rate-limit không
                         err_text = ""
                         try:
-                            error_loc = page.locator(".shopee-input-helper-text, [class*='error-message'], [class*='errorMessage']").first
+                            error_loc = page.locator(".shopee-input-helper-text, [class*='error-message'], [class*='errorMessage'], [class*='alert'], [role='alert']").first
                             if await error_loc.count() > 0 and await error_loc.is_visible():
                                 err_text = (await error_loc.inner_text()).strip()
                         except Exception:
                             pass
+
+                        if not err_text:
+                            try:
+                                body_snip = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                                if "Một lỗi đã xảy ra" in body_snip:
+                                    err_text = "Một lỗi đã xảy ra. Shopee giới hạn IP/SĐT tạm thời (Vui lòng thử lại sau ít phút hoặc nạp Proxy)!"
+                                elif "đã được đăng ký" in body_snip or "đã được sử dụng" in body_snip:
+                                    err_text = "Số điện thoại này đã được đăng ký tài khoản Shopee trước đó."
+                            except Exception:
+                                pass
 
                         if err_text:
                             log_step(f"Shopee báo lỗi số {phone_num}: {err_text}")
@@ -395,8 +405,8 @@ class ShopeeRegService:
                         masked_p = phone_num[:4] + "***" + phone_num[-3:] if len(phone_num) >= 7 else phone_num
                         if provided_phone:
                             await notify(
-                                f"📩 {prefix}Shopee đã gửi mã OTP về số {phone_num}!\n"
-                                f"👉 Soạn: OTP <mã> trong 90s để hoàn tất.",
+                                f"📞 {prefix}Shopee đang gọi điện / gửi mã OTP về số {phone_num}!\n"
+                                f"👉 Bạn hãy nghe máy lấy mã, sau đó soạn: OTP <mã> (hoặc gõ luôn 6 số) trong 90s để bot hoàn tất nhé! ✨",
                                 "3/4 Nhập mã OTP",
                                 send_to_user=True
                             )

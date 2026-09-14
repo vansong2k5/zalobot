@@ -415,32 +415,26 @@ def generate_human_tracks(distance: int) -> List[Tuple[float, float, float]]:
     return tracks
 
 
-# Bảng tra thực nghiệm chính xác tuyệt đối (Mouse Drag -> Piece translateX)
+# Bảng tra thực nghiệm chính xác tuyệt đối đo trực tiếp trên Shopee VPS (Mouse Drag -> Piece translateX)
 CALIBRATED_SAMPLES = [
     (  0.0,   0.00),
-    ( 10.0,   0.45),
-    ( 20.0,   3.77),
-    ( 30.0,  11.78),
-    ( 40.0,  24.65),
-    ( 50.0,  41.53),
-    ( 60.0,  61.19),
-    ( 70.0,  82.36),
-    ( 80.0, 103.97),
-    ( 90.0, 125.18),
-    (100.0, 145.39),
-    (110.0, 164.23),
-    (120.0, 181.46),
-    (130.0, 197.03),
-    (140.0, 210.91),
-    (150.0, 223.20),
-    (160.0, 233.98),
+    ( 20.0,   5.26),
+    ( 40.0,  28.29),
+    ( 60.0,  64.67),
+    ( 80.0, 105.56),
+    (100.0, 144.66),
+    (120.0, 178.84),
+    (140.0, 207.10),
+    (160.0, 229.63),
+    (180.0, 236.00),
+    (240.0, 236.00)
 ]
 _TABLE_MOUSE = np.array([s[0] for s in CALIBRATED_SAMPLES], dtype=float)
 _TABLE_PIECE_X = np.array([s[1] for s in CALIBRATED_SAMPLES], dtype=float)
 
 def piece_x_to_mouse_drag(target_x: float) -> float:
     """Quy đổi tọa độ lỗ khuyết thành khoảng cách kéo chuột chính xác tuyệt đối qua nội suy S-Curve."""
-    target_x = max(0.0, min(233.98, float(target_x)))
+    target_x = max(0.0, min(236.00, float(target_x)))
     return float(np.interp(target_x, _TABLE_PIECE_X, _TABLE_MOUSE))
 
 
@@ -500,40 +494,30 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
 
             # 2. Nếu chưa có candidates (lần đầu hoặc sau khi bấm Refresh)
             if not cached_candidates or cand_index >= len(cached_candidates):
-                eval_data = await page.evaluate('''async () => {
+                eval_data = await page.evaluate('''() => {
                     let bg = document.querySelector('canvas[width="280"]');
                     let piece = document.querySelector('canvas[width="44"]') || document.querySelector('div.HrMY5p canvas:not([width="280"])');
-                    
-                    // Chờ canvas vẽ xong dữ liệu hình ảnh (không bị trắng xóa)
-                    for (let w = 0; w < 30; w++) {
-                        if (bg && piece) {
-                            try {
-                                let ctx = bg.getContext('2d');
-                                let p = ctx.getImageData(10, 10, 50, 50).data;
-                                let sum = 0;
-                                for (let i = 0; i < p.length; i += 4) {
-                                    sum += p[i] + p[i+1] + p[i+2];
-                                }
-                                if (sum > 1000) break;
-                            } catch (e) {}
-                        }
-                        await new Promise(r => setTimeout(r, 200));
-                        bg = document.querySelector('canvas[width="280"]');
-                        piece = document.querySelector('canvas[width="44"]') || document.querySelector('div.HrMY5p canvas:not([width="280"])');
-                    }
-
                     let pieceContainer = document.querySelector('div[class*="_4U309i"]') || (piece ? piece.parentElement : null);
                     let bgRect = bg ? bg.getBoundingClientRect() : null;
                     let pieceRect = piece ? piece.getBoundingClientRect() : null;
 
-                    return {
-                        bg_data: bg ? bg.toDataURL('image/png') : null,
-                        piece_data: piece ? piece.toDataURL('image/png') : null,
-                        bg_rect: bgRect ? {x: bgRect.x, y: bgRect.y, width: bgRect.width, height: bgRect.height} : null,
-                        piece_rect: pieceRect ? {x: pieceRect.x, y: pieceRect.y, width: pieceRect.width, height: pieceRect.height} : null,
-                        piece_transform: pieceContainer ? (pieceContainer.style.transform || pieceContainer.getAttribute('style') || '') : ''
-                    };
+                    try {
+                        return {
+                            bg_data: bg ? bg.toDataURL('image/png') : null,
+                            piece_data: piece ? piece.toDataURL('image/png') : null,
+                            bg_rect: bgRect ? {x: bgRect.x, y: bgRect.y, width: bgRect.width, height: bgRect.height} : null,
+                            piece_rect: pieceRect ? {x: pieceRect.x, y: pieceRect.y, width: pieceRect.width, height: pieceRect.height} : null,
+                            piece_transform: pieceContainer ? (pieceContainer.style.transform || pieceContainer.getAttribute('style') || '') : ''
+                        };
+                    } catch(e) {
+                        return { error: e.toString() };
+                    }
                 }''')
+
+                if not eval_data or not eval_data.get("bg_data"):
+                    logger.warning("Không lấy được dữ liệu canvas ở lần %d (%s). Đang đợi...", attempt, eval_data.get("error") if eval_data else "null")
+                    await asyncio.sleep(1.0)
+                    continue
 
                 bg_bytes = None
                 piece_bytes = None
@@ -640,30 +624,23 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
             calculated_mouse_drag = piece_x_to_mouse_drag(target_tx)
             logger.info("📐 Target translateX %.1fpx -> Khoảng cách kéo chuột lý thuyết: %.2fpx", target_tx, calculated_mouse_drag)
 
-            await page.mouse.move(start_x + random.uniform(-0.8, 0.8), start_y + random.uniform(-0.8, 0.8))
-            await asyncio.sleep(random.uniform(0.12, 0.18))
+            await page.mouse.move(start_x, start_y)
+            await asyncio.sleep(0.12)
             await page.mouse.down()
-            await asyncio.sleep(random.uniform(0.10, 0.15))
+            await asyncio.sleep(0.10)
 
-            # Sinh quỹ đạo Minimum-Jerk sinh học Flash & Hogan kéo thẳng tới mục tiêu
-            tracks = generate_human_tracks(max(5, int(round(calculated_mouse_drag))))
-            cur_x = start_x
+            # Kéo mượt bằng Playwright native steps=25 (không bị Chromium drop event như rapid sleep)
+            cur_x = start_x + calculated_mouse_drag
             cur_y = start_y
-            for dx, dy, dt in tracks:
-                cur_x += dx
-                cur_y += dy * 0.25
-                await page.mouse.move(cur_x, cur_y)
-                await asyncio.sleep(dt)
-
-            # Dừng nghỉ 180ms - 220ms để browser layout ổn định
-            await asyncio.sleep(random.uniform(0.18, 0.22))
+            await page.mouse.move(cur_x, cur_y, steps=25)
+            await asyncio.sleep(0.18)
 
             # RADAR CLOSED-LOOP SUB-PIXEL TRACKING: Vòng lặp vi chỉnh đa bước (tối đa 6 nhịp)
             for r_step in range(6):
                 try:
                     real_tx = await page.evaluate('''() => {
                         let piece = document.querySelector('canvas[width="44"]') || document.querySelector('div.HrMY5p canvas:not([width="280"])');
-                        let pieceContainer = document.querySelector('div[class*="_4U309i"]') || (piece ? piece.parentElement : null);
+                        let pieceContainer = piece ? piece.parentElement : null;
                         if (!pieceContainer) return null;
                         let st = pieceContainer.style.transform || pieceContainer.getAttribute('style') || '';
                         if (st.includes('translateX(')) {
@@ -676,23 +653,21 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
                     }''')
                     if real_tx is not None:
                         diff = target_tx - real_tx
-                        logger.info("📡 [Radar Nhịp %d/6] Target TX=%.2f, Real TX=%.2f, Sai số diff=%.2fpx", r_step + 1, target_tx, real_tx, diff)
-                        if abs(diff) <= 0.6:
+                        logger.info("📡 [Radar Nhịp %d/6] Target TX=%.1fpx, Real TX=%.1fpx, Sai số diff=%.2fpx", r_step + 1, target_tx, real_tx, diff)
+                        if abs(diff) <= 0.7:
                             logger.info("🎯 [Radar Lock] Đã khóa khít tâm lỗ khuyết (sai số %.2fpx)!", diff)
                             break
-                        # Tính bước nhích chuột tỷ lệ thuận với diff (tối đa 10px)
-                        micro_dx = max(-10.0, min(10.0, diff * 0.65))
-                        cur_x += micro_dx
-                        await page.mouse.move(cur_x, cur_y)
-                        await asyncio.sleep(0.08)
+                        step_mouse = max(-6.0, min(6.0, diff / 1.8))
+                        cur_x += step_mouse
+                        await page.mouse.move(cur_x, cur_y, steps=3)
+                        await asyncio.sleep(0.10)
                     else:
                         break
                 except Exception as ex_radar:
                     logger.debug("Radar evaluate error: %s", ex_radar)
                     break
 
-            # Dừng nhẹ 160ms trước khi nhả chuột
-            await asyncio.sleep(random.uniform(0.14, 0.18))
+            await asyncio.sleep(0.15)
             await page.mouse.up()
             logger.info("👆 Đã nhả chuột ghép hình! Chờ Shopee xác thực...")
 
@@ -739,13 +714,13 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
                     if (!bgCanvas || bgCanvas.getBoundingClientRect().width === 0) {
                         return { status: 'success', reason: 'Canvas Captcha đã đóng' };
                     }
-
+                    return { status: 'waiting', reason: 'Đang đợi Shopee phản hồi' };
                 }''')
-                if verify_res.get("status") in ("success", "blocked"):
+                if verify_res and verify_res.get("status") in ("success", "blocked"):
                     break
 
-            v_status = verify_res.get("status")
-            v_reason = verify_res.get("reason", "")
+            v_status = verify_res.get("status") if verify_res else "unknown"
+            v_reason = verify_res.get("reason", "") if verify_res else "" 
 
             if v_status == "success":
                 logger.info("🎉 VƯỢT CAPTCHA THÀNH CÔNG ở lần thử %d! (%s)", attempt, v_reason)
@@ -935,12 +910,18 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
 
         # 2B. Kiểm tra Shopee WAF Block Modal ("Vui lòng thử lại sau" / "Chưa thể hoàn tất xác thực lúc này")
         try:
-            is_blocked_modal = await page.evaluate('''() => {
+            blocked_reason = await page.evaluate('''() => {
                 let t = document.body ? (document.body.innerText || '') : '';
-                return t.includes('Vui lòng thử lại sau') || t.includes('Chưa thể hoàn tất xác thực');
+                if (t.includes('Một lỗi đã xảy ra') || t.includes('Một lỗi xảy ra')) {
+                    return 'Shopee báo lỗi: Một lỗi đã xảy ra (IP hoặc số bị Shopee giới hạn tạm thời, cần đổi Proxy hoặc chờ ít phút)';
+                }
+                if (t.includes('Vui lòng thử lại sau') || t.includes('Chưa thể hoàn tất xác thực')) {
+                    return 'Shopee chặn xác thực: Vui lòng thử lại sau (Cần đổi IP / chờ ít phút)';
+                }
+                return '';
             }''')
-            if is_blocked_modal:
-                logger.warning("⛔ Phát hiện Shopee chặn: 'Vui lòng thử lại sau / Chưa thể hoàn tất xác thực lúc này'!")
+            if blocked_reason:
+                logger.warning("⛔ Phát hiện Shopee chặn: '%s'!", blocked_reason)
                 retry_btn = page.locator("button:has-text('Thử Lại'), button:has-text('Thử lại')").first
                 if await retry_btn.count() > 0 and await retry_btn.is_visible():
                     logger.info("👉 Đang bấm nút 'Thử Lại' trên modal...")
@@ -950,7 +931,7 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
                         await retry_btn.dispatch_event("click")
                     await asyncio.sleep(2.5)
                     continue
-                return False, "Shopee chặn xác thực: Vui lòng thử lại sau (Cần đổi IP / chờ ít phút)"
+                return False, blocked_reason
         except Exception:
             pass
 
@@ -1071,8 +1052,8 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
             except Exception:
                 pass
 
-            await asyncio.sleep(2.0)
-            # Kiểm tra ngay lập tức xem có Slider Captcha lần 2 xuất hiện không
+            await asyncio.sleep(1.5)
+            # Kiểm tra xem có Slider Captcha lần 2 xuất hiện không
             try:
                 c_modal = page.locator("canvas[width='280'], div.HrMY5p, div[class*='F0XJ1W']").first
                 if await c_modal.count() > 0 and await c_modal.is_visible():
@@ -1080,9 +1061,15 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
                     solved2 = await solve_shopee_slider_captcha(page, max_attempts=5)
                     if not solved2:
                         return False, "Không vượt qua Captcha lần 2 sau 5 lần thử"
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(1.5)
             except Exception as ex_c2:
                 logger.debug("Lỗi kiểm tra Captcha lần 2: %s", ex_c2)
+
+            # KHI ĐÃ BẤM VOICE CALL HOẶC SMS THÀNH CÔNG -> SHOPEE ĐÃ GỌI / GỬI SMS!
+            # RETURN NGAY LẬP TỨC ĐỂ BOT CHUYỂN SANG BƯỚC NHẬN OTP MƯỢT MÀ!
+            if selected_method:
+                logger.info("🎉 Đã kích hoạt cuộc gọi / SMS thành công qua %s! Chuyển ngay sang bước chờ OTP...", selected_method)
+                return True, "otp_screen"
             continue
 
         # 5. Kiểm tra Modal Cuộc gọi thoại: "Hoạt động bất thường được phát hiện. Chúng tôi sẽ gọi..."

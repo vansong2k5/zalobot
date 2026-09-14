@@ -10,9 +10,13 @@ Tập trung chuyên sâu vào BÁN HÀNG TỰ ĐỘNG & GIAO DỊCH QUA SEPAY:
 
 import re
 import time
+import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import Union
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("CustomerBotService")
 
 from app.db import SessionLocal
 from app.models import Product, ProductStock, Order, ShopeeRegLog, User
@@ -93,7 +97,7 @@ def clean_zalo_message_text(raw_text: str) -> str:
     return text
 
 
-def format_price_tag(amount: Decimal | float | int) -> str:
+def format_price_tag(amount: Union[Decimal, float, int]) -> str:
     """Format giá tiền theo phong cách Gen Z ngắn gọn (ví dụ 7,000 -> 7k, 60,000 -> 60k)."""
     val = int(amount)
     if val >= 1000 and val % 1000 == 0:
@@ -102,20 +106,15 @@ def format_price_tag(amount: Decimal | float | int) -> str:
 
 
 def render_product_menu_text(db: Session, target_name: str = "") -> str:
-    """Tạo bảng menu sản phẩm phong cách Gen Z trực quan, bắt mắt."""
+    """Tạo bảng menu sản phẩm gọn, rõ, phù hợp hiển thị Zalo."""
     products = db.query(Product).filter(Product.status == "active").order_by(Product.id.asc()).all()
-    greeting = f"👋 Hé lô {target_name}! Chúc bạn săn deal vui vẻ 🚀\n" if target_name else ""
+    greeting = f"👋 {target_name}! " if target_name else ""
 
-    lines = [
-        "✨ 𝐇Ệ 𝐓𝐇Ố𝐍𝐆 𝐓Ự ĐỘ𝐍𝐆 𝟐𝟒/𝟕 ✨",
-        greeting,
-        "🛒 𝐁Ả𝐍𝐆 𝐆𝐈Á 𝐃Ị𝐂𝐇 𝐕Ụ 𝐒Ẵ𝐍 𝐇À𝐍𝐆:",
-    ]
+    lines = [f"✨ {greeting}BẢNG GIÁ DỊCH VỤ 24/7:"]
 
     if not products:
-        lines.append("• Hiện kho đang cập nhật thêm dịch vụ mới...")
+        lines.append("• Kho đang cập nhật thêm dịch vụ mới...")
     else:
-        # Icon sinh động theo từng loại sản phẩm
         ICONS = {1: "💎", 2: "🎬", 3: "🤖", 4: "🎨", 5: "📚", 6: "📱", 7: "☕"}
         for p in products:
             p_name_lower = p.product_name.lower()
@@ -123,34 +122,30 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
                 continue
 
             if p.id in [3, 5] or "drive" in p_name_lower:
-                stock_tag = "🟢 Sẵn hàng 24/7"
+                stock_tag = "🟢 Sẵn hàng"
             elif p.id == 6 or "thuê sim" in p_name_lower or "otp" in p_name_lower:
-                stock_tag = "🟢 Sẵn sàng (Cấp số tự động 24/7)"
+                stock_tag = "🟢 Cấp số tự động"
             elif p.id == 7 or "highlands" in p_name_lower:
-                stock_tag = "🟢 Sẵn sàng (Cấp OTP tự động)"
+                stock_tag = "🟢 Cấp OTP tự động"
             else:
                 stock = db.query(ProductStock).filter(
                     ProductStock.product_id == p.id,
                     ProductStock.status == "available"
                 ).count()
-                stock_tag = f"🟢 Sẵn {stock} acc" if stock > 0 else "🔴 Tạm hết"
+                stock_tag = f"🟢 Còn {stock} acc" if stock > 0 else "🔴 Tạm hết"
 
             price_tag = format_price_tag(p.price)
             ico = ICONS.get(p.id, "📦")
-            lines.append(f"{ico} [{p.id}] {p.product_name} ➔ {price_tag}")
-            lines.append(f"    └ {stock_tag}\n")
+            lines.append(f"{ico} [{p.id}] {p.product_name} — {price_tag} | {stock_tag}")
 
     lines.extend([
-        "⚡ 𝐋Ố𝐈 𝐓Ắ𝐂 𝐌𝐔𝐀 𝐒𝐈Ê𝐔 𝐓Ố𝐂:",
-        "👉 Nạp tiền vào ví: Nhắn NAP (Tối thiểu 10k)",
-        "👉 Mua 1 cái: Nhắn số [Mã] (Ví dụ: 1 hoặc 6)",
-        "👉 Mua nhiều: BUY <Mã> <SL> (Ví dụ: BUY 1 2)",
-        "👉 Check SĐT Shopee: CHECKSDT <SĐT> (hoặc gửi SĐT)",
-        "👉 Lấy mã OTP: Nhắn OTP",
-        "👉 Xem số dư ví: Nhắn SODU",
-        "👉 Lấy nick đã mua: Nhắn DONHANG",
-        "👉 Tra cứu SPX: CO <Mã vận đơn>",
-        "👉 Hướng dẫn từ A-Z: Nhắn HELP",
+        "",
+        "⚡ CÁCH MUA:",
+        "• Nhắn số mã để mua 1 (vd: 1)",
+        "• BUY <mã> <sl> mua nhiều (vd: BUY 1 2)",
+        "• SODU — số dư | DONHANG — nick đã mua",
+        "• CHECKSDT <số> — check F02 | OTP — lấy mã",
+        "• CO <mã> — tra vận đơn SPX | HELP — trợ giúp",
     ])
     return "\n".join(lines).strip()
 
@@ -316,7 +311,7 @@ def handle_zalo_user_message(
             f"⚡ TIỆN ÍCH DÀNH CHO BẠN:\n"
             f"• Dùng số dư ví để mua trực tiếp mọi tài khoản & dịch vụ trên bot.\n"
             f"• Khi đủ tiền trong ví, bạn chỉ cần soạn mua (Ví dụ: '1' hoặc 'BUY 1 2'), hệ thống sẽ TỰ ĐỘNG TRỪ VÍ và cấp số tức thì không cần chuyển khoản!\n"
-            f"• Soạn 'NAP <số_tiền>' để lấy mã QR nạp thêm tiền vào ví.\n\n"
+            f"• Nạp tiền vào ví: Vui lòng liên hệ trực tiếp Admin để được cộng số dư.\n\n"
             f"👉 Soạn 'MENU' để xem danh sách dịch vụ sẵn hàng nhé! ✨"
         )
 
@@ -334,101 +329,16 @@ def handle_zalo_user_message(
         return
 
     # =========================================================================
-    # LỆNH 1.2: NẠP TIỀN VÀO VÍ TỰ ĐỘNG (NAP [Số tiền])
+    # LỆNH 1.2: NẠP TIỀN VÀO VÍ (TẠM ĐÓNG CỔNG TỰ ĐỘNG)
     # =========================================================================
     if first_word in ["NAP", "NAPTIEN", "NẠP"]:
         send_chat_action(zalo_user_id, "typing")
-        if not user:
-            send_zalo_message(zalo_user_id, "⚠️ Không tìm thấy thông tin tài khoản của bạn. Soạn MENU để bắt đầu nhé!")
-            return
-
-        # Nếu người dùng chỉ gõ NAP / NAPTIEN / NẠP mà không kèm số tiền
-        if len(parts) == 1 or (len(parts) == 2 and parts[1].upper() in ["TIEN", "TIỀN", "VÍ", "VI"]):
-            nap_menu = (
-                "💳 𝐂Ổ𝐍𝐆 𝐍Ạ𝐏 𝐓𝐈Ề𝐍 𝐕À𝐎 𝐕Í 𝐓Ự ĐỘ𝐍𝐆 (𝟐𝟒/𝟕)\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "⚡ Hệ thống nạp tự động qua VietQR - SePay, cộng tiền sau 3 giây!\n"
-                "📌 Số tiền nạp tối thiểu: 10,000 VNĐ / lần.\n\n"
-                "⚡ 𝐂Á𝐂 𝐆Ó𝐈 𝐍Ạ𝐏 𝐍𝐇𝐀𝐍𝐇 (Soạn theo cú pháp):\n"
-                "👉 NAP 10K   ➔ Nạp 10,000 VNĐ\n"
-                "👉 NAP 20K   ➔ Nạp 20,000 VNĐ\n"
-                "👉 NAP 50K   ➔ Nạp 50,000 VNĐ\n"
-                "👉 NAP 100K  ➔ Nạp 100,000 VNĐ\n"
-                "👉 NAP 200K  ➔ Nạp 200,000 VNĐ\n\n"
-                "💡 𝐇𝐎Ặ𝐂 𝐍Ạ𝐏 𝐒Ố 𝐓𝐈Ề𝐍 𝐓Ù𝐘 Ý:\n"
-                "👉 Soạn: NAP <Số tiền> (Ví dụ: NAP 30000 hoặc NAP 150K)\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✨ Hãy soạn một trong các lệnh trên để lấy mã QR nạp tiền ngay nhé! 🚀"
-            )
-            send_zalo_message(zalo_user_id, nap_menu)
-            return
-
-        # Parse số tiền người dùng nhập
-        raw_amt = parts[1].strip().lower()
-        amt_digits = re.sub(r"\D", "", raw_amt)
-        deposit_amount = 0
-        if amt_digits:
-            val = int(amt_digits)
-            if "k" in raw_amt or (0 < val < 1000):
-                val = val * 1000
-            deposit_amount = val
-
-        # Kiểm tra mức nạp tối thiểu 10,000 VNĐ
-        if deposit_amount < 10000:
-            send_zalo_message(
-                zalo_user_id,
-                "⚠️ 𝐒Ố 𝐓𝐈Ề𝐍 𝐍Ạ𝐏 𝐊𝐇Ô𝐍𝐆 𝐇Ợ𝐏 𝐋Ệ!\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "📌 Hệ thống quy định số tiền nạp tối thiểu là 10,000 VNĐ.\n\n"
-                "👉 Bạn vui lòng soạn: NAP 10K hoặc chọn các gói lớn hơn (NAP 20K, NAP 50K, NAP 100K) nhé! ✨"
-            )
-            return
-
-        # Lấy hoặc tạo sản phẩm 'Nạp tiền vào ví' để tránh lỗi ForeignKeyViolation
-        deposit_prod = db.query(Product).filter(Product.product_name.ilike("%Nạp tiền%")).first()
-        if not deposit_prod:
-            deposit_prod = Product(
-                product_name="Nạp tiền vào ví",
-                price=0,
-                description="Đơn nạp tiền tự động vào ví qua SePay",
-                status="active"
-            )
-            db.add(deposit_prod)
-            db.commit()
-            db.refresh(deposit_prod)
-
-        order_code = generate_unique_order_code(db)
-        dep_order = Order(
-            order_code=order_code,
-            user_id=user.id,
-            product_id=deposit_prod.id,
-            quantity=1,
-            price=deposit_amount,
-            status="pending",
-            platform="zalo",
-            platform_channel_id=str(zalo_user_id)
+        send_zalo_message(
+            zalo_user_id,
+            "⚠️ CỔNG NẠP TIỀN TỰ ĐỘNG TẠM ĐÓNG!\n"
+            "📌 Đang bảo trì nâng cấp, vui lòng liên hệ Admin để được cộng số dư.\n"
+            "💡 Vẫn có thể mua từng đơn qua QR: BUY <mã> hoặc gõ số mã (vd: 1)."
         )
-        db.add(dep_order)
-        db.commit()
-
-        qr_url = generate_sepay_qr_url(amount=deposit_amount, order_code=order_code)
-        from app.config import SEPAY_BANK, SEPAY_ACCOUNT_NO, SEPAY_ACCOUNT_NAME
-        caption = (
-            f"💳 NẠP TIỀN VÀO VÍ BOT (TỰ ĐỘNG 24/7)\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Số tiền nạp: {deposit_amount:,.0f} VNĐ\n"
-            f"🏦 Ngân hàng: {SEPAY_BANK}\n"
-            f"🔢 Số tài khoản: {SEPAY_ACCOUNT_NO}\n"
-            f"👤 Chủ tài khoản: {SEPAY_ACCOUNT_NAME}\n"
-            f"✍️ Nội dung CK: {order_code}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Hệ thống tự động kiểm tra và cộng tiền vào ví sau 3 giây!\n"
-            f"⚠️ BẮT BUỘC ghi đúng nội dung '{order_code}' để được cộng tiền tự động!\n"
-            f"💡 Soạn 'SODU' để kiểm tra số dư ví bất cứ lúc nào."
-        )
-        sent = send_zalo_photo(zalo_user_id, qr_url, caption=caption)
-        if not sent:
-            send_zalo_message(zalo_user_id, f"{caption}\n\n👉 Link mã QR SePay: {qr_url}")
         return
 
     # =========================================================================
@@ -545,10 +455,10 @@ def handle_zalo_user_message(
         if not phone_to_check:
             send_zalo_message(
                 zalo_user_id,
-                "📱 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐊𝐈Ể𝐌 𝐓𝐑𝐀 𝐒Ố Đ𝐈Ệ𝐍 𝐓𝐇𝐎Ạ𝐈 𝐒𝐇𝐎𝐏𝐄𝐄 (𝐅𝐑𝐄𝐄):\n\n"
-                "👉 Soạn: CHECKSDT <Số điện thoại>\n"
-                "• Hoặc gửi trực tiếp số điện thoại (Ví dụ: 0987654321)\n\n"
-                "✨ Kiểm tra tức thì đầu số sạch, đã đăng ký hay có thể BACK số hay không! 🚀"
+                "📱 KIỂM TRA SỐ ĐIỆN THOẠI SHOPEE (FREE):\n"
+                "• CHECKSDT <SĐT> (vd: CHECKSDT 0987654321)\n"
+                "• Hoặc gửi thẳng số điện thoại\n"
+                "✨ Kiểm tra đầu số sạch, đã đăng ký hay có thể back số!"
             )
             return
     elif first_word not in COMMAND_KEYWORDS and not is_quick_buy_number:
@@ -570,19 +480,14 @@ def handle_zalo_user_message(
         if not proxy_raw_input:
             send_zalo_message(
                 zalo_user_id,
-                "🌐 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐓𝐇Ê𝐌 𝐏𝐑𝐎𝐗𝐘:\n\n"
-                "👉 Cú pháp:\n"
-                "ADDPROXY <danh sách proxy>\n\n"
-                "💡 Ví dụ thêm 1 proxy:\n"
-                "ADDPROXY 103.152.118.25:8080\n\n"
-                "💡 Ví dụ có user/pass:\n"
-                "ADDPROXY user:pass@104.28.1.1:8080\n\n"
-                "✨ Bot sẽ tự động test tốc độ và kiểm tra IP sạch trước khi lưu! 🚀"
+                "🌐 HƯỚNG DẪN THÊM PROXY:\n"
+                "• ADDPROXY 103.152.118.25:8080\n"
+                "• ADDPROXY user:pass@104.28.1.1:8080\n"
+                "✨ Bot tự test IP sạch trước khi lưu!"
             )
             return
 
-        from app.services.proxy_validator import parse_and_normalize_proxy, validate_proxy_connection
-        from app.services.proxy_service import load_admin_proxies, save_admin_proxies
+        from app.services.proxy_service import normalize_proxy_url as parse_and_normalize_proxy, validate_proxy_connection, load_admin_proxies, save_admin_proxies
 
         is_admin = is_admin_user(zalo_user_id) or (sender_id and is_admin_user(sender_id))
 
@@ -676,16 +581,11 @@ def handle_zalo_user_message(
             )
             return
 
-        lines = [
-            f"📦 𝐊𝐇𝐎 𝐏𝐑𝐎𝐗𝐘 𝐂Ủ𝐀 𝐁Ạ𝐍 ({stats['total']} proxy khả dụng):",
-            "━━━━━━━━━━━━━━━━━━━━"
-        ]
+        lines = [f"📦 KHO PROXY ({stats['total']} proxy khả dụng):"]
         for idx, p in enumerate(stats["proxies"][:10], 1):
-            lines.append(f"{idx}. {p['url']} ({p['latency_ms']}ms) - Nạp: {p['created_at']}")
-        lines.append("━━━━━━━━━━━━━━━━━━━━")
-        lines.append("👉 Soạn 'REG <số lượng>' để tạo tài khoản tự động (6k/acc)!")
-        lines.append("👉 Soạn 'REGSDT <SĐT>' để tạo bằng số của bạn (1k/acc)!")
-        lines.append("👉 Soạn 'CLEARPROXY' nếu muốn xóa toàn bộ kho proxy.")
+            lines.append(f"{idx}. {p['url']} ({p['latency_ms']}ms) — {p['created_at']}")
+        lines.append("• ADDPROXY <ip:port> — thêm proxy")
+        lines.append("• CLEARPROXY — xóa toàn bộ")
         send_zalo_message(zalo_user_id, "\n".join(lines))
         return
 
@@ -697,376 +597,18 @@ def handle_zalo_user_message(
         return
 
     # =========================================================================
-    # LỆNH 1.4.3: ĐĂNG KÝ SHOPEE FULL STACK (REG <SL> - 6,000đ/ACC)
-    # VÀ ĐĂNG KÝ BẰNG SĐT CỦA BẠN (REGSDT <SĐT> - 1,000đ/ACC)
+    # LỆNH ĐĂNG KÝ TÀI KHOẢN SHOPEE (TẠM ĐÓNG ĐỂ BẢO TRÌ NÂNG CẤP)
     # =========================================================================
-    if first_word in ["REG", "REGSDT"]:
+    if first_word in ["REG", "REGSDT", "REGLOG"]:
         send_chat_action(zalo_user_id, "typing")
-
-        # Kiểm tra quy tắc 1 tiến trình/user
-        busy, active_t = is_user_busy(user_task_key)
-        if busy:
-            send_zalo_message(
-                zalo_user_id,
-                f"⚠️ 𝐁Ạ𝐍 Đ𝐀𝐍𝐆 𝐂Ó 𝟏 𝐓𝐈Ế𝐍 𝐓𝐑Ì𝐍𝐇 Đ𝐀𝐍𝐆 𝐂𝐇Ạ𝐘!\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📌 Nhiệm vụ: {active_t.get('task_name')}\n"
-                f"📍 Tiến độ: {active_t.get('current_step')}\n\n"
-                f"👉 Hệ thống chỉ cho phép 1 tiến trình / người dùng tại một thời điểm.\n"
-                f"👉 Để dừng tiến trình hiện tại, vui lòng soạn: STOP"
-            )
-            return
-
-        arg_text = " ".join(parts[1:]).strip()
-        detected_phone = extract_phone_number(arg_text) if arg_text else None
-
-        if first_word == "REG":
-            # Nếu khách gõ 'REG 0912345678' nhầm sang số điện thoại
-            if detected_phone:
-                send_zalo_message(
-                    zalo_user_id,
-                    f"💡 𝐁Ạ𝐍 Đ𝐀𝐍𝐆 𝐍𝐇Ậ𝐏 𝐒Ố Đ𝐈Ệ𝐍 𝐓𝐇𝐎Ạ𝐈 𝐑𝐈Ê𝐍𝐆 ({detected_phone})!\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👉 Vui lòng dùng lệnh: REGSDT {detected_phone}\n"
-                    f"💰 Giá ưu đãi: Chỉ 1,000đ / tài khoản!\n"
-                    f"📌 Quy trình: Bot mở Shopee qua Proxy & giải Captcha ➔ Shopee gửi mã OTP về máy bạn ➔ Bạn nhập 'OTP <mã>' để hoàn tất.\n\n"
-                    f"💡 Còn lệnh 'REG <số_lượng>' là cấp SIM tự động từ A-Z (6,000đ/acc). Ví dụ: REG 1"
-                )
-                return
-
-            # Luồng cấp SIM tự động Full Stack (6,000đ / acc)
-            is_own_phone = False
-            custom_phone = None
-            if arg_text.isdigit():
-                req_quantity = max(1, min(int(arg_text), 10))
-            else:
-                req_quantity = 1
-            fee_per_acc = 6000
-            total_fee = fee_per_acc * req_quantity
-            service_label = f"Cấp SIM tự động ({req_quantity} tài khoản)"
-
-        elif first_word == "REGSDT":
-            # Luồng dùng SĐT của khách (1,000đ / acc)
-            if not detected_phone:
-                send_zalo_message(
-                    zalo_user_id,
-                    "⚠️ 𝐕𝐔𝐈 𝐋Ò𝐍𝐆 𝐍𝐇Ậ𝐏 𝐒Ố Đ𝐈Ệ𝐍 𝐓𝐇𝐎Ạ𝐈 𝐂Ủ𝐀 𝐁Ạ𝐍!\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n"
-                    "👉 Cú pháp: REGSDT <số_điện_thoại>\n"
-                    "💡 Ví dụ: REGSDT 0987654321\n\n"
-                    "💰 Chi phí: 1,000đ / tài khoản\n"
-                    "📌 Quy trình thực hiện:\n"
-                    "1️⃣ Bot mở Shopee qua Proxy riêng của bạn & tự giải Captcha bằng AI.\n"
-                    "2️⃣ Shopee gửi tin nhắn chứa mã OTP về máy bạn.\n"
-                    "3️⃣ Bạn chỉ cần soạn: OTP <mã> (Ví dụ: OTP 123456 hoặc gõ 123456) trong 90s để bot hoàn tất tạo nick!"
-                )
-                return
-
-            is_own_phone = True
-            custom_phone = detected_phone
-            req_quantity = 1
-            fee_per_acc = 1000
-            total_fee = 1000
-            service_label = f"SĐT cá nhân ({custom_phone})"
-
-        # BƯỚC 1: Kiểm tra số dư ví của khách
-        user_bal = float(user.balance or 0.0) if user else 0.0
-        if user_bal < total_fee:
-            send_zalo_message(
-                zalo_user_id,
-                f"⚠️ 𝐒Ố 𝐃Ư 𝐓À𝐈 𝐊𝐇𝐎Ả𝐍 𝐊𝐇Ô𝐍𝐆 ĐỦ!\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🛒 Dịch vụ: {service_label}\n"
-                f"💰 Cần thanh toán: {total_fee:,.0f} VNĐ\n"
-                f"💵 Số dư ví hiện tại: {user_bal:,.0f} VNĐ\n"
-                f"📌 Còn thiếu: {float(total_fee - user_bal):,.0f} VNĐ\n\n"
-                f"💡 𝐁Ả𝐍𝐆 𝐆𝐈Á 𝐃Ị𝐂𝐇 𝐕Ụ REG SHOPEE:\n"
-                f"• Thuê SIM tự động: 6,000đ / tài khoản (Soạn: REG <số_lượng>)\n"
-                f"• SĐT của chính bạn: 1,000đ / tài khoản (Soạn: REG <SĐT_của_bạn>)\n\n"
-                f"👉 Vui lòng soạn 'NAP' để lấy mã QR nạp tiền vào ví tức thì nhé! ✨"
-            )
-            return
-
-        from .user_proxy_service import get_user_verified_proxies, deactivate_dead_proxy
-        from app.services.proxy_service import load_admin_proxies, save_admin_proxies
-        from app.services.proxy_validator import validate_proxy_connection
-        from app.config import DEFAULT_PROXY
-
-        # BƯỚC 2: Cấp Proxy theo thứ tự ưu tiên:
-        # 1. Proxy riêng của User (nếu user có nạp proxy riêng)
-        # 2. Proxy Hệ Thống do Admin cấu hình (sử dụng đến khi die)
-        # 3. IP mặc định của hệ thống (DEFAULT_PROXY hoặc Direct)
-        available_proxies = []
-
-        # 1. Thử tìm proxy riêng của user
-        user_proxies, dead_proxies = get_user_verified_proxies(zalo_user_id, count=req_quantity)
-        if dead_proxies:
-            send_zalo_message(
-                zalo_user_id,
-                f"🧹 ĐÃ DỌN DẸP KHO PROXY:\n"
-                f"⚠️ Phát hiện {len(dead_proxies)} proxy riêng đã hết hạn hoặc mất kết nối và đã được loại bỏ."
-            )
-        if user_proxies:
-            available_proxies = user_proxies
-
-        # 2. Nếu user chưa có proxy riêng -> Lấy Proxy Hệ Thống của Admin (dùng đến khi die)
-        if not available_proxies:
-            admin_proxies = load_admin_proxies()
-            valid_admin_proxies = []
-            for a_p in admin_proxies:
-                is_alive, msg, _ = validate_proxy_connection(a_p, timeout=5)
-                if is_alive:
-                    valid_admin_proxies.append(a_p)
-                else:
-                    logger.warning(f"Admin proxy {a_p} đã die ({msg}), tự động loại bỏ.")
-
-            # Cập nhật danh sách admin proxy nếu có con bị die
-            if len(valid_admin_proxies) != len(admin_proxies):
-                save_admin_proxies(valid_admin_proxies)
-
-            if valid_admin_proxies:
-                sys_p = valid_admin_proxies[0]
-                available_proxies = [sys_p] * req_quantity
-
-        # 3. Nếu không có cả 2 -> Dùng IP mặc định hệ thống như trước giờ (DEFAULT_PROXY hoặc direct)
-        if not available_proxies:
-            def_p = DEFAULT_PROXY or "direct"
-            available_proxies = [def_p] * req_quantity
-
-        total_to_reg = req_quantity
-        actual_total_cost = fee_per_acc * total_to_reg
-
-        # BƯỚC 3: Trừ tiền ví của khách trước khi khởi chạy
-        try:
-            user.balance = float(user.balance or 0.0) - actual_total_cost
-            db.commit()
-            db.refresh(user)
-        except Exception as e:
-            db.rollback()
-            send_zalo_message(zalo_user_id, f"❌ Lỗi hệ thống khi thanh toán ví: {str(e)}")
-            return
-
-        # Khởi tạo khóa tiến trình độc quyền cho User
-        task_title = f"Reg {service_label}"
-        task_started = start_user_task(user_task_key, task_title)
-        if not task_started:
-            # Hoàn tiền nếu không start được task
-            user.balance = float(user.balance or 0.0) + actual_total_cost
-            db.commit()
-            send_zalo_message(zalo_user_id, "⚠️ Không thể bắt đầu tiến trình mới. Vui lòng thử lại hoặc soạn STOP!")
-            return
-
         send_zalo_message(
             zalo_user_id,
-            f"🚀 [1/4] Đang khởi động đăng ký {total_to_reg} tài khoản Shopee...\n"
-            f"💰 Đã trừ ví: {actual_total_cost:,.0f}đ (Số dư: {float(user.balance):,.0f}đ)\n"
-            f"ℹ️ Bot sẽ tự động thông báo khi tạo xong acc và hoàn tiền 100% nếu không thành công!\n"
-            f"👉 Soạn 'STOP' nếu muốn hủy tiến trình."
+            "⚠️ 𝐓Í𝐍𝐇 𝐍Ă𝐍𝐆 ĐĂ𝐍𝐆 𝐊Ý 𝐓À𝐈 𝐊𝐇𝐎Ả𝐍 𝐓Ạ𝐌 ĐÓ𝐍𝐆!\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📌 Tính năng đăng ký tài khoản Shopee tự động hiện đang tạm đóng để nâng cấp hệ thống.\n"
+            "👉 Bạn có thể đặt mua tài khoản có sẵn trong kho bằng cách gõ 'MENU' hoặc số thứ tự sản phẩm (Ví dụ: 1, 2, 3).\n"
+            "👉 Mọi thắc mắc hoặc cần hỗ trợ vui lòng liên hệ trực tiếp Admin!"
         )
-
-        try:
-            from .log_notifier_service import send_log_message
-            c_name = display_name or (user.display_name if user else "Khách hàng")
-            send_log_message(
-                f"🚀 [BẮT ĐẦU ĐĂNG KÝ ACC]\n"
-                f"• Khách: {c_name} (ID: ...{str(user_task_key)[-6:]})\n"
-                f"• Dịch vụ: {service_label}\n"
-                f"• Thanh toán: {actual_total_cost:,.0f}đ"
-            )
-        except Exception:
-            pass
-
-        import threading
-        import asyncio
-
-        def run_batch_reg_worker():
-            from .shopee_reg_service import ShopeeRegService
-            reg_srv = ShopeeRegService()
-
-            def notify_sync(status_txt: str):
-                send_zalo_message(zalo_user_id, status_txt)
-
-            def refund_single_acc(amount: float) -> float:
-                """Hoàn lại tiền vào ví của khách hàng trong CSDL."""
-                db_ref = SessionLocal()
-                new_b = 0.0
-                try:
-                    u_ref = db_ref.query(User).filter(User.user_id == str(user_task_key)).first()
-                    if u_ref:
-                        u_ref.balance = float(u_ref.balance or 0.0) + amount
-                        db_ref.commit()
-                        new_b = float(u_ref.balance)
-                except Exception as ex:
-                    db_ref.rollback()
-                finally:
-                    db_ref.close()
-                return new_b
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            accumulated_success = []
-            refunded_count = 0
-
-            try:
-                for idx, proxy_url in enumerate(available_proxies[:total_to_reg], 1):
-                    # Kiểm tra xem user có yêu cầu STOP giữa chừng không
-                    if is_stop_requested(user_task_key):
-                        unprocessed = total_to_reg - (idx - 1)
-                        if unprocessed > 0:
-                            refund_amount = unprocessed * fee_per_acc
-                            new_bal = refund_single_acc(refund_amount)
-                            notify_sync(
-                                f"🛑 [LỆNH STOP] Đã dừng chuỗi đăng ký theo yêu cầu!\n"
-                                f"💰 Đã tự động hoàn lại {refund_amount:,.0f}đ ({unprocessed} tài khoản chưa chạy) vào ví.\n"
-                                f"💵 Số dư ví hiện tại: {new_bal:,.0f}đ"
-                            )
-                        break
-
-                    acc_tag = f"[Acc {idx}/{total_to_reg}]" if total_to_reg > 1 else ""
-                    update_user_task_progress(user_task_key, f"{acc_tag} Đang xử lý...".strip())
-
-                    try:
-                        from app.config import VIOTP_SERVICE_ID
-                        res = loop.run_until_complete(
-                            reg_srv.register_account(
-                                user_proxy=proxy_url,
-                                zalo_user_id=user_task_key,
-                                service_id=VIOTP_SERVICE_ID,
-                                provided_phone=custom_phone,
-                                acc_prefix=acc_tag,
-                                progress_callback=notify_sync
-                            )
-                        )
-                    except Exception as loop_ex:
-                        res = {"ok": False, "step": "runtime_ex", "error": str(loop_ex), "should_refund": True}
-
-                    # Kiểm tra nếu bị dừng trong khi chạy
-                    if res.get("step") == "stopped" or is_stop_requested(user_task_key):
-                        is_rented, r_phone = is_task_phone_rented(user_task_key)
-                        if is_rented and not custom_phone:
-                            notify_sync(f"🛑 {acc_tag} Đã dừng tiến trình. Tài khoản này đã thuê số thành công ({r_phone}) nên không hoàn phí.")
-                        else:
-                            new_bal = refund_single_acc(fee_per_acc)
-                            notify_sync(f"🛑 {acc_tag} Đã dừng tiến trình. Đã hoàn {fee_per_acc:,.0f}đ vào ví (Số dư: {new_bal:,.0f}đ).")
-                        break
-
-                    if res.get("ok"):
-                        accumulated_success.append(res)
-                        p_phone = res.get("phone")
-                        p_pwd = res.get("password")
-                        p_spc_st = res.get("spc_st") or ""
-
-                        success_msg = (
-                            f"🎉 {acc_tag} ĐĂNG KÝ THÀNH CÔNG!\n"
-                            f"📱 SĐT: {p_phone}\n"
-                            f"🔑 Pass: {p_pwd}\n"
-                            f"🍪 SPC_ST: {p_spc_st}\n"
-                            f"📋 Copy: {p_phone}|{p_pwd}|{p_spc_st}"
-                        )
-                        notify_sync(success_msg.strip())
-                    else:
-                        # Thất bại -> TỰ ĐỘNG HOÀN TIỀN
-                        refunded_count += 1
-                        new_bal = refund_single_acc(fee_per_acc)
-                        err_msg = res.get("error", "Đăng ký không thành công.")
-                        if res.get("step") == "proxy":
-                            deactivate_dead_proxy(zalo_user_id, proxy_url)
-
-                        notify_sync(
-                            f"⚠️ {acc_tag} Thất bại: {err_msg}\n"
-                            f"💰 Đã hoàn {fee_per_acc:,.0f}đ vào ví (Số dư: {new_bal:,.0f}đ)."
-                        )
-
-                    # Kiểm tra lại lệnh STOP trước khi chuyển sang acc tiếp theo
-                    if is_stop_requested(user_task_key):
-                        unprocessed = total_to_reg - idx
-                        if unprocessed > 0:
-                            refund_amount = unprocessed * fee_per_acc
-                            new_bal = refund_single_acc(refund_amount)
-                            notify_sync(
-                                f"🛑 [LỆNH STOP] Đã dừng chuỗi đăng ký!\n"
-                                f"💰 Đã hoàn lại {refund_amount:,.0f}đ ({unprocessed} tài khoản) vào ví (Số dư: {new_bal:,.0f}đ)."
-                            )
-                        break
-
-                    # Nếu còn tài khoản tiếp theo, nghỉ nhẹ 2 giây
-                    if idx < total_to_reg:
-                        update_user_task_progress(user_task_key, f"{acc_tag} Chuyển tiếp...")
-                        time.sleep(2)
-
-                # Tổng kết nếu reg từ 2 acc trở lên
-                c_name = display_name or (user.display_name if user else "Khách hàng")
-                if total_to_reg > 1 and accumulated_success:
-                    export_lines = [f"{a['phone']}|{a['password']}|{a['spc_st']}" for a in accumulated_success]
-                    summary_msg = (
-                        f"🏆 Hoàn tất {len(accumulated_success)}/{total_to_reg} tài khoản:\n"
-                        f"{chr(10).join(export_lines)}\n"
-                        "👉 Soạn REGLOG để xem lại lịch sử."
-                    )
-                    notify_sync(summary_msg)
-
-                    try:
-                        from .log_notifier_service import send_log_message
-                        send_log_message(
-                            f"🏆 [HOÀN TẤT ĐĂNG KÝ ACC]\n"
-                            f"• Khách: {c_name} (ID: ...{str(user_task_key)[-6:]})\n"
-                            f"• Tạo thành công: {len(accumulated_success)}/{total_to_reg} tài khoản Shopee\n"
-                            f"• Hoàn tiền: {refunded_count} tài khoản"
-                        )
-                    except Exception:
-                        pass
-
-                elif not is_stop_requested(user_task_key):
-                    notify_sync("⚠️ Hoàn tất tiến trình nhưng không tạo được tài khoản nào thành công. Toàn bộ tiền đã được hoàn trả đầy đủ vào ví của bạn!")
-                    try:
-                        from .log_notifier_service import send_log_message
-                        send_log_message(
-                            f"⚠️ [REG ACC KHÔNG THÀNH CÔNG]\n"
-                            f"• Khách: {c_name} (ID: ...{str(user_task_key)[-6:]})\n"
-                            f"• Yêu cầu: {total_to_reg} tài khoản\n"
-                            f"• Kết quả: 0/{total_to_reg} thành công (Đã hoàn tiền 100%)"
-                        )
-                    except Exception:
-                        pass
-
-            except Exception as ex:
-                notify_sync(f"❌ Lỗi hệ thống trong quá trình đăng ký: {str(ex)}")
-            finally:
-                loop.close()
-                finish_user_task(user_task_key)
-
-        threading.Thread(target=run_batch_reg_worker, daemon=True).start()
-        return
-
-    # =========================================================================
-    # LỆNH 1.5: XEM LỊCH SỬ ĐĂNG KÝ TÀI KHOẢN (REGLOG)
-    # =========================================================================
-    if first_word == "REGLOG":
-        send_chat_action(zalo_user_id, "typing")
-        logs = db.query(ShopeeRegLog).order_by(ShopeeRegLog.id.desc()).limit(5).all()
-        if not logs:
-            send_zalo_message(zalo_user_id, "ℹ️ Hệ thống chưa có lịch sử đăng ký tài khoản nào.")
-            return
-
-        lines = [
-            "📜 𝐋Ị𝐂𝐇 𝐒Ử ĐĂNG KÝ TÀI KHOẢN GẦN ĐÂY:",
-            "━━━━━━━━━━━━━━━━━━━━"
-        ]
-        for item in logs:
-            stt_icon = "🟢 Thành công" if item.status == "success" else ("🔴 Thất bại" if item.status == "failed" else "⏳ Đang chạy")
-            rec_tag = "🔄 Reclaim" if item.is_reclaimed else "✨ Mới tinh"
-            lines.append(
-                f"#{item.id} | SĐT: {item.phone_number or 'Chưa cấp'} ({rec_tag})\n"
-                f"• Trạng thái: {stt_icon}\n"
-                f"• User: {item.username or 'N/A'}\n"
-                f"• IP Proxy: {item.external_ip or 'N/A'}\n"
-                f"• Thời gian: {item.created_at.strftime('%H:%M %d/%m/%Y') if item.created_at else ''}"
-            )
-            if item.status == "failed" and item.error_message:
-                lines.append(f"• Lý do: {item.error_message[:60]}...")
-            lines.append("────────────────────")
-
-        send_zalo_message(zalo_user_id, "\n".join(lines))
         return
 
     # =========================================================================
@@ -1238,9 +780,7 @@ def handle_zalo_user_message(
         # Nếu gọi lệnh DONHANG trong Nhóm, gửi riêng để bảo vệ mật khẩu không bị người khác lấy
         target_chat_id = effective_user_id if is_group_chat and effective_user_id else zalo_user_id
 
-        lines = [
-            "📦 𝐋Ị𝐂𝐇 𝐒Ử ĐƠ𝐍 𝐇À𝐍𝐆 & 𝐓À𝐈 𝐊𝐇𝐎Ả𝐍 ĐÃ 𝐌𝐔𝐀\n"
-        ]
+        lines = ["📦 LỊCH SỬ ĐƠN HÀNG & TÀI KHOẢN ĐÃ MUA"]
 
         # 1. Hiển thị tài khoản vật lý (Shopee, Netflix, Capcut...)
         for s in purchased_stocks:
@@ -1275,11 +815,10 @@ def handle_zalo_user_message(
             lines.append(f"• Thông tin bàn giao:\n{d.account_delivered}\n")
 
         lines.extend([
-            "⚡ 𝐓𝐇𝐀𝐎 𝐓Á𝐂 𝐍𝐇𝐀𝐍𝐇:",
-            "• Gán mail Shopee: ADDMAIL <Mã TK>",
-            "• Duyệt login Shopee: XACMINH <Mã TK>",
-            "• Lấy mã OTP SIM: Nhắn OTP",
-            "• Mua thêm dịch vụ: Nhắn MENU"
+            "",
+            "• Gán mail: ADDMAIL <Mã TK>",
+            "• Duyệt login: XACMINH <Mã TK>",
+            "• OTP SIM: Nhắn OTP | Mua thêm: MENU"
         ])
 
         msg_content = "\n".join(lines)
@@ -1347,8 +886,7 @@ def handle_zalo_user_message(
 
         # 2. Cấp Proxy theo thứ tự ưu tiên:
         from .user_proxy_service import get_user_verified_proxies, deactivate_dead_proxy
-        from app.services.proxy_service import load_admin_proxies, save_admin_proxies
-        from app.services.proxy_validator import validate_proxy_connection
+        from app.services.proxy_service import load_admin_proxies, save_admin_proxies, validate_proxy_connection
         from app.config import DEFAULT_PROXY
 
         user_proxy = None
@@ -1547,11 +1085,10 @@ def handle_zalo_user_message(
         if len(parts) < 2:
             send_zalo_message(
                 zalo_user_id,
-                "🚚 𝐓𝐑𝐀 𝐂Ứ𝐔 𝐕Ậ𝐍 ĐƠ𝐍 𝐒𝐇𝐎𝐏𝐄𝐄 𝐄𝐗𝐏𝐑𝐄𝐒𝐒 (𝐅𝐑𝐄𝐄):\n\n"
-                "👉 Soạn: TRACK <Mã vận đơn>\n"
-                "• Ví dụ SPX: TRACK SPXVN061857044824\n"
-                "• Ví dụ đơn shop: TRACK DH249985\n\n"
-                "✨ Tự động cập nhật lộ trình bưu kiện tức thì 24/7! 🚀"
+                "🚚 TRA CỨU VẬN ĐƠN SPX EXPRESS (FREE):\n"
+                "• TRACK SPXVN061857044824\n"
+                "• TRACK DH249985 (đơn nội bộ)\n"
+                "✨ Cập nhật lộ trình bưu kiện tức thì!"
             )
             return
 
@@ -1567,37 +1104,22 @@ def handle_zalo_user_message(
     if first_word in ["HELP", "?"]:
         send_chat_action(zalo_user_id, "typing")
         help_lines = [
-            "📖 𝐁Ả𝐍𝐆 𝐋Ệ𝐍𝐇 & 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐒Ử 𝐃Ụ𝐍𝐆 𝐁𝐎𝐓 𝟐𝟒/𝟕 ✨",
-            "━━━━━━━━━━━━━━━━━━━━",
-            "📌 Mỗi chức năng đại diện bằng ĐÚNG 1 COMMAND duy nhất!\n",
-            "🛒 𝟏. 𝐌𝐔𝐀 𝐇À𝐍𝐆 & 𝐕Í 𝐒Ố 𝐃Ư:",
-            "• MENU : Xem bảng giá & số lượng sẵn kho 24/7",
-            "• BUY <Mã> <SL> : Mua tài khoản số lượng (VD: BUY 1 2)",
-            "  (Hoặc nhắn nhanh số mã món hàng, ví dụ: 1)",
-            "• SODU : Xem số dư ví khả dụng của bạn",
-            "• NAP <Số tiền> : Lấy mã QR nạp tiền vào ví tự động (VD: NAP 50000)\n",
-            "🚀 𝟐. ĐĂNG KÝ SHOPEE TỰ ĐỘNG (CẦN PROXY RIÊNG):",
-            "• REG <Số lượng> : Cấp SIM tự động Full Stack từ A-Z (6,000đ/nick)",
-            "  (Hệ thống tự cấp SIM, vượt xác thực an toàn, nhận OTP & xuất nick)",
-            "• REGSDT <SĐT> : Đăng ký bằng SĐT của bạn (1,000đ/nick)",
-            "  (Bot giải captcha ➔ Shopee gửi OTP về máy bạn ➔ Bạn nhập 'OTP <mã>')",
-            "• OTP <Mã> : Nhập mã xác nhận khi reg nick (VD: OTP 123456 hoặc gõ 123456)",
-            "• REGLOG : Xem lịch sử các nick Shopee đã đăng ký\n",
-            "🔐 𝟑. QUẢN LÝ TÀI KHOẢN & EMAIL:",
-            "• ADDMAIL <Mã TK> : Gán hòm thư bảo mật tự động (Bắt buộc qua Proxy riêng)",
-            "• XACMINH <Mã TK> : Tự động duyệt login Shopee qua Email trong 3s",
-            "• DONHANG : Xem lại toàn bộ nick & mật khẩu đã mua\n",
-            "🌐 𝟒. QUẢN LÝ PROXY RIÊNG (1 USER = 1 LUỒNG = 1 PROXY):",
-            "• ADDPROXY <Proxy> : Nạp proxy của bạn (VD: ADDPROXY 116.96.177.251:16863)",
-            "• LISTPROXY : Xem danh sách proxy khả dụng trong kho",
-            "• CLEARPROXY : Xóa toàn bộ kho proxy\n",
-            "🛠️ 𝟓. TIỆN ÍCH & ĐIỀU KHIỂN:",
-            "• STOP : Dừng ngay tiến trình đang chạy & tự động hoàn tiền",
-            "• CHECKSDT <SĐT> : Kiểm tra số điện thoại sạch / đã đăng ký Shopee (Free)",
-            "• TRACK <Mã SPX> : Tra cứu bưu kiện Shopee Express (Free)",
-            "• HELP : Xem lại bảng hướng dẫn này",
-            "━━━━━━━━━━━━━━━━━━━━",
-            "💡 Soạn 'MENU' để bắt đầu trải nghiệm ngay! 🚀"
+            "📖 HƯỚNG DẪN SỬ DỤNG BOT 24/7\n",
+            "🛒 MUA HÀNG & VÍ:",
+            "• MENU — bảng giá | SODU — số dư",
+            "• BUY <mã> <sl> — mua hàng (vd: BUY 1 2)",
+            "• DONHANG — nick & pass đã mua\n",
+            "🔐 QUẢN LÝ TÀI KHOẢN SHOPEE:",
+            "• ADDMAIL <Mã TK> — gán email bảo mật",
+            "• XACMINH <Mã TK> — duyệt login qua email\n",
+            "🌐 PROXY RIÊNG:",
+            "• ADDPROXY <ip:port> — thêm proxy",
+            "• LISTPROXY — xem kho | CLEARPROXY — xóa\n",
+            "🛠️ TIỆN ÍCH:",
+            "• STOP — dừng tiến trình",
+            "• CHECKSDT <SĐT> — check F02 Shopee",
+            "• TRACK <mã SPX> — tra vận đơn",
+            "• HELP — xem lại trang này",
         ]
         if is_admin_user(admin_check_id):
             help_lines.append("\n👑 QUẢN TRỊ: Nhắn 'ADMIN' để mở bảng quản lý Admin.")

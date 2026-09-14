@@ -3,6 +3,12 @@
 Khởi tạo server, nạp toàn bộ routers, và tự động tạo bảng CSDL khi khởi động.
 """
 
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.config import ENVIRONMENT
@@ -22,6 +28,17 @@ async def lifespan(app: FastAPI):
     print("==================================================")
     print(f"🚀 Bot Zalo FastAPI Backend đang khởi động [{ENVIRONMENT}]")
     init_db()
+    try:
+        from app.services.viotp_service import resume_pending_otp_polling
+        import threading
+        threading.Thread(target=resume_pending_otp_polling, daemon=True).start()
+    except Exception as e:
+        print(f"Lỗi khởi động resume_pending_otp_polling: {e}")
+    try:
+        from app.services.system_guard_service import start_system_guard
+        start_system_guard()
+    except Exception as e:
+        print(f"Lỗi khởi động start_system_guard: {e}")
     print("==================================================")
     yield
     print("🛑 Server đã dừng hoạt động an toàn.")

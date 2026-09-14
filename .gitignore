@@ -58,3 +58,6 @@ htmlcov/
 # Backup files
 *.sql.gz
 *.dump
+*.db
+*.sqlite
+*.sqlite3

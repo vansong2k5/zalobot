@@ -11,7 +11,7 @@ Phân chia thành các module chức năng:
 """
 
 from .zalo_service import send_zalo_message, send_zalo_sticker, send_chat_action, send_zalo_photo
-from .user_service import get_or_create_user, is_admin_user
+from .user_service import get_or_create_user, get_or_create_user_by_platform, link_user_platform, is_admin_user
 from .order_service import generate_unique_order_code, expire_pending_orders
 from .sepay_service import (
     generate_sepay_qr_url,

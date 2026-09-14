@@ -53,6 +53,23 @@ def format_payment_instructions(order: Order, product_name: str, qr_url: str = "
     )
 
 
+def _send_order_success_log(order: Order, customer=None):
+    """Gửi thông báo đơn hàng thanh toán thành công sang Log Bot cho Admin."""
+    try:
+        from .log_notifier_service import send_log_message
+        buyer_name = customer.display_name if customer else "Khách hàng"
+        prod_title = order.product.product_name if order.product else f"Sản phẩm #{order.product_id}"
+        send_log_message(
+            f"💰 [ĐƠN HÀNG MỚI THÀNH CÔNG]\n"
+            f"• Khách: {buyer_name}\n"
+            f"• Dịch vụ: {prod_title} (SL: {order.quantity})\n"
+            f"• Số tiền: {int(order.price):,} VNĐ\n"
+            f"• Mã đơn: #{order.order_code}"
+        )
+    except Exception:
+        pass
+
+
 def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) -> dict:
     """
     Thực hiện bàn giao dịch vụ / tài khoản cho đơn hàng đã thanh toán:
@@ -66,6 +83,25 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
     customer = order.user
     customer_zalo_id = customer.user_id if customer else str(order.user_id)
     actual_amount = transfer_amount if transfer_amount is not None else order.price
+
+    # 0. ĐƠN NẠP TIỀN TRỰC TIẾP VÀO VÍ (LỆNH NAP)
+    if order.product_id == 0 or "nạp" in prod_name_lower or "nap" in prod_name_lower:
+        if customer:
+            customer.balance = float(customer.balance or 0.0) + float(actual_amount)
+        order.status = "completed"
+        order.completed_at = datetime.utcnow()
+        order.account_delivered = f"Nạp thành công +{int(actual_amount):,} VNĐ vào ví"
+        db.commit()
+
+        cur_bal = int(customer.balance if customer else 0)
+        deposit_msg = (
+            f"🎉 NẠP TIỀN THÀNH CÔNG! [Mã #{order_code}] 💳✨\n\n"
+            f"💵 Số tiền nạp: +{int(actual_amount):,} VNĐ\n"
+            f"💼 Số dư ví hiện tại: {cur_bal:,} VNĐ\n\n"
+            f"👉 Bạn có thể dùng số dư ví để đăng ký tài khoản (REG, REGSDT) hoặc mua hàng (BUY) ngay nhé! ✨"
+        )
+        send_zalo_message(customer_zalo_id, deposit_msg)
+        return {"success": True, "message": f"Nạp thành công {int(actual_amount):,}đ vào ví!"}
 
     # 1. DỊCH VỤ THUÊ SIM / SỐ OTP SHOPEE (ViOTP Service ID 4)
     is_shopee_otp = (
@@ -85,22 +121,21 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
             phone = rent_res["phone_number"]
             req_id = rent_res["request_id"]
 
-            order.status = "completed"
+            order.status = "processing"
             order.completed_at = datetime.utcnow()
             order.account_delivered = f"SĐT: {phone} | RequestID: {req_id} (Đang chờ mã OTP...)"
             db.commit()
 
             sim_msg = (
-                f"📱 ĐÃ CẤP SỐ ĐIỆN THOẠI SHOPEE! [Đơn #{order_code}] 🚀\n"
-                f"───────────────────────\n"
+                f"📱 ĐÃ CẤP SỐ ĐIỆN THOẠI SHOPEE! [Đơn #{order_code}] 🚀\n\n"
                 f"📞 Số điện thoại: {phone}\n"
                 f"📋 Chạm copy: {phone}\n"
-                f"⏳ Thời gian chờ mã: 5 phút\n"
-                f"───────────────────────\n"
+                f"⏳ Thời gian chờ mã: 5 phút\n\n"
                 f"📌 CÁCH NHẬN MÃ OTP:\n"
                 f"1️⃣ Mở app/web Shopee, dán số {phone} vào để đăng ký/đăng nhập.\n"
                 f"2️⃣ Bấm 'Gửi mã xác nhận qua SMS'.\n"
                 f"3️⃣ Giữ nguyên Zalo, bot sẽ tự động gửi mã OTP vào đây ngay khi có tin nhắn! ✨\n\n"
+                f"💡 Mẹo: Bạn có thể nhắn 'OTP' bất kỳ lúc nào để bot kiểm tra lấy mã ngay!\n\n"
                 f"⚠️ Sau 5 phút nếu không nhận được mã, hệ thống sẽ TỰ ĐỘNG HOÀN TIỀN 100% vào ví của bạn."
             )
             send_zalo_message(customer_zalo_id, sim_msg)
@@ -118,6 +153,7 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
 
             from .group_service import notify_groups_order_completed
             notify_groups_order_completed(db, order)
+            _send_order_success_log(order, customer)
 
             return {"success": True, "message": f"Đơn hàng thuê SIM #{order_code} đã cấp số thành công!"}
         else:
@@ -130,10 +166,10 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
             db.commit()
 
             fail_msg = (
-                f"⚠️ ĐƠN HÀNG #{order_code} - HỆ THỐNG TẠM HẾT SỐ SẠCH!\n"
-                f"Lý do: {err_reason}\n\n"
+                f"⚠️ ĐƠN HÀNG #{order_code} - HỆ THỐNG TẠM HẾT SỐ SẠCH!\n\n"
+                f"Lý do: {err_reason}\n"
                 f"💰 Bot đã tự động hoàn lại {int(order.price):,} VNĐ vào ví số dư của bạn!\n"
-                f"💼 Số dư ví hiện tại: {int(customer.balance):,} VNĐ\n"
+                f"💼 Số dư ví hiện tại: {int(customer.balance):,} VNĐ\n\n"
                 f"👉 Bạn có thể soạn 'BUY 6' để mua lại ngay bằng số dư ví khi có số nhé! ✨"
             )
             send_zalo_message(customer_zalo_id, fail_msg)
@@ -148,24 +184,22 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
             req_id = rent_res["request_id"]
             carrier = rent_res.get("carrier", "Đầu số sạch")
 
-            order.status = "completed"
+            order.status = "processing"
             order.completed_at = datetime.utcnow()
             order.account_delivered = f"SĐT: {phone} ({carrier}) | RequestID: {req_id} (Đang chờ OTP nhận cafe...)"
             db.commit()
 
             highlands_msg = (
-                f"☕ ĐÃ CẤP SỐ NHẬN CÀ PHÊ HIGHLANDS! [Đơn #{order_code}] 🎉\n"
-                f"───────────────────────\n"
+                f"☕ ĐÃ CẤP SỐ NHẬN CÀ PHÊ HIGHLANDS! [Đơn #{order_code}] 🎉\n\n"
                 f"📞 Số điện thoại: {phone} ({carrier})\n"
                 f"📋 Chạm copy SĐT: {phone}\n"
-                f"⏳ Hạn chờ mã OTP: 5 phút\n"
-                f"───────────────────────\n"
+                f"⏳ Hạn chờ mã OTP: 5 phút\n\n"
                 f"🚀 QUY TRÌNH 4 BƯỚC NHẬN LY CÀ PHÊ 29K:\n"
-                f"1️⃣ BẮT BUỘC: XÓA APP Highlands cũ ➔ Lên App Store TẢI LẠI! (Không xóa app tải lại sẽ KHÔNG CÓ voucher).\n"
+                f"1️⃣ BẮT BUỘC: XÓA APP Highlands cũ ➔ Lên App Store TẢI LẠI!\n"
                 f"2️⃣ Mở app mới tải, dán số: {phone} ➔ Bấm 'Gửi mã OTP'.\n"
                 f"3️⃣ Khi app hỏi mã giới thiệu ➔ BẤM 'BỎ QUA' (Không nhập mã).\n"
                 f"4️⃣ Vào được app thành công ➔ ĐỢI ĐÚNG 2 PHÚT, voucher ly Cà phê Sữa Đá 29k sẽ tự động xuất hiện trong mục 'Ưu đãi'!\n\n"
-                f"✨ Giữ nguyên màn hình Zalo, bot sẽ tự động bắt mã OTP gửi vào đây tức thì!\n\n"
+                f"✨ Bot sẽ tự động bắt mã OTP gửi vào đây tức thì! (Hoặc nhắn 'OTP' để lấy mã ngay).\n\n"
                 f"⚠️ LƯU Ý ĐẶC BIỆT VỀ BẢO HÀNH:\n"
                 f"• Dịch vụ tối ưu tự động trên iOS (iPhone/iPad).\n"
                 f"• Khách dùng ANDROID vui lòng LIÊN HỆ ADMIN TRƯỚC! Nếu tự ý đăng ký trên Android bị mất tiền mà không có mã thì hệ thống KHÔNG BẢO HÀNH!\n\n"
@@ -185,6 +219,7 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
 
             from .group_service import notify_groups_order_completed
             notify_groups_order_completed(db, order)
+            _send_order_success_log(order, customer)
 
             return {"success": True, "message": f"Đơn hàng Highlands #{order_code} đã cấp số thành công!"}
         else:
@@ -225,20 +260,18 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
         db.commit()
 
         drive_msg = (
-            f"🎉 GIAO DỊCH THÀNH CÔNG ĐƠN #{order_code}! 🚀\n"
-            f"───────────────────────\n"
+            f"🎉 GIAO DỊCH THÀNH CÔNG ĐƠN #{order_code}! 🚀\n\n"
             f"📦 Dịch vụ: {order.product.product_name}\n"
-            f"💰 Đã thanh toán: {int(order.price):,} VNĐ\n"
-            f"───────────────────────\n"
+            f"💰 Đã thanh toán: {int(order.price):,} VNĐ\n\n"
             f"📌 THÔNG TIN NHẬN GÓI / TÀI LIỆU CỦA BẠN:\n\n"
             f"{delivered_text}\n\n"
-            f"───────────────────────\n"
             f"Cảm ơn bạn đã ủng hộ shop! Chúc bạn học tập và làm việc hiệu quả ✨"
         )
         send_zalo_message(customer_zalo_id, drive_msg)
 
         from .group_service import notify_groups_order_completed
         notify_groups_order_completed(db, order)
+        _send_order_success_log(order, customer)
 
         return {"success": True, "message": f"Đơn hàng #{order_code} đã bàn giao thành công!"}
 
@@ -285,15 +318,12 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
 
     first_stock_id = stocks[0].id if stocks else ""
     success_msg = (
-        f"🎉 GIAO DỊCH THÀNH CÔNG ĐƠN #{order_code}! 🚀\n"
-        f"───────────────────────\n"
+        f"🎉 GIAO DỊCH THÀNH CÔNG ĐƠN #{order_code}! 🚀\n\n"
         f"📦 Dịch vụ: {order.product.product_name}\n"
         f"🔢 Số lượng: {order.quantity} tài khoản\n"
-        f"💰 Đã thanh toán: {int(order.price):,} VNĐ\n"
-        f"───────────────────────\n"
+        f"💰 Đã thanh toán: {int(order.price):,} VNĐ\n\n"
         f"🔑 THÔNG TIN TÀI KHOẢN CỦA BẠN:\n\n"
         f"{delivered_text}\n\n"
-        f"───────────────────────\n"
         f"⚡ HƯỚNG DẪN ĐĂNG NHẬP & BẢO MẬT:\n"
         f"1️⃣ Đăng nhập nick vào Shopee bằng Nick & Pass ở trên.\n"
         f"2️⃣ Nếu tài khoản chưa gán mail: Soạn ADDMAIL {first_stock_id}\n"
@@ -306,6 +336,7 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
 
     from .group_service import notify_groups_order_completed
     notify_groups_order_completed(db, order)
+    _send_order_success_log(order, customer)
 
     return {"success": True, "message": f"Đơn hàng #{order_code} hoàn tất và đã gửi tài khoản!"}
 
@@ -348,13 +379,11 @@ def process_sepay_payment(db: Session, content: str, transfer_amount: Decimal, t
             db.commit()
 
             double_msg = (
-                f"💰 ĐÃ NHẬN KHOẢN CHUYỂN TIỀN BỔ SUNG! [Đơn #{order_code}] 💳✨\n"
-                f"───────────────────────\n"
+                f"💰 ĐÃ NHẬN KHOẢN CHUYỂN TIỀN BỔ SUNG! [Đơn #{order_code}] 💳✨\n\n"
                 f"💵 Số tiền nhận: +{int(transfer_amount):,} VNĐ\n"
                 f"ℹ️ Trạng thái: Đơn #{order_code} trước đó đã được xử lý ({order.status}).\n\n"
                 f"✅ Bot đã TỰ ĐỘNG NẠP {int(transfer_amount):,} VNĐ VÀO SỐ DƯ VÍ của bạn!\n"
-                f"💼 Số dư ví hiện tại: {int(customer.balance):,} VNĐ\n"
-                f"───────────────────────\n"
+                f"💼 Số dư ví hiện tại: {int(customer.balance):,} VNĐ\n\n"
                 f"👉 Bạn có thể soạn lệnh mua (Ví dụ: 'BUY 6' hoặc '1') để mua dịch vụ mới bằng số dư ví mà không cần chuyển khoản nữa nhé! ✨"
             )
             send_zalo_message(customer_zalo_id, double_msg)

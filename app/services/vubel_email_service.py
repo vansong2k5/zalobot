@@ -28,7 +28,7 @@ def call_shopee_core_api(endpoint: str, method: str = "POST", json_data: dict = 
     }
 
     try:
-        with httpx.Client(timeout=35.0) as client:
+        with httpx.Client(timeout=50.0) as client:
             if method.upper() == "POST":
                 resp = client.post(url, headers=headers, json=json_data or {})
             else:
@@ -123,15 +123,16 @@ def find_user_stock_by_identifier(
     return None, f"❌ Không tìm thấy tài khoản hoặc đơn hàng [{identifier}] thuộc sở hữu của bạn."
 
 
-BACKUP_PROXY = "http://163.61.183.185:8888"
+BACKUP_PROXY = "http://163.61.183.185:38888"
 
 
 def get_candidate_proxies(preferred_proxy: str = None) -> list:
     """
     Lấy danh sách proxy khả dụng theo thứ tự ưu tiên:
     1. preferred_proxy (nếu có truyền)
-    2. Danh sách PROXY_LIST trong .env (ngăn cách bằng dấu phẩy)
-    3. DEFAULT_PROXY trong .env
+    2. Danh sách Proxy do Admin cấu hình (admin_proxies.json)
+    3. Danh sách PROXY_LIST trong .env
+    4. DEFAULT_PROXY tự host của VPS (Tinyproxy :38888)
     """
     candidates = []
     if preferred_proxy and preferred_proxy.strip():
@@ -139,6 +140,15 @@ def get_candidate_proxies(preferred_proxy: str = None) -> list:
         if not p.startswith("http://") and not p.startswith("https://") and not p.startswith("socks5://"):
             p = f"http://{p}"
         candidates.append(p)
+
+    # 2. Ưu tiên Proxy Admin nạp vào
+    try:
+        from .proxy_service import load_admin_proxies
+        for p in load_admin_proxies():
+            if p and p not in candidates:
+                candidates.append(p)
+    except Exception:
+        pass
 
     for item in PROXY_LIST:
         if item and item.strip():
@@ -148,12 +158,10 @@ def get_candidate_proxies(preferred_proxy: str = None) -> list:
             if p not in candidates:
                 candidates.append(p)
 
-    if DEFAULT_PROXY and DEFAULT_PROXY.strip():
-        p = DEFAULT_PROXY.strip()
-        if not p.startswith("http://") and not p.startswith("https://") and not p.startswith("socks5://"):
-            p = f"http://{p}"
-        if p not in candidates:
-            candidates.append(p)
+    # Fallback mặc định về Proxy tự host VPS
+    vps_fallback = DEFAULT_PROXY or "http://163.61.183.185:38888"
+    if vps_fallback not in candidates:
+        candidates.append(vps_fallback)
 
     return candidates
 
@@ -162,20 +170,44 @@ def add_email_to_shopee_account(
     db: Session,
     stock: ProductStock,
     custom_email: str = None,
-    proxy: str = None
+    proxy: str = None,
+    strict_user_proxy: bool = False
 ) -> Dict[str, Any]:
     """
     Gán hòm thư bảo mật (Add Mail) vào tài khoản Shopee.
-    Tích hợp tự động chuyển mạch Proxy (Auto-failover) nếu proxy chính bị nghẽn/die:
+    - strict_user_proxy=True: BẮT BUỘC chỉ dùng Proxy riêng của User, không dùng chung IP VPS hoặc proxy hệ thống.
+    - Tích hợp tự động chuyển mạch Proxy (Auto-failover) nếu không dùng chế độ strict.
     1. Nếu đã có sẵn Cookie SPC_ST sống: Thử addmail trực tiếp bằng SPC_ST trước (nhanh, không cần login).
     2. Nếu chưa có SPC_ST hoặc SPC_ST hết hạn: Đăng nhập Shopee (/v1/shopee/login) để lấy SPC_ST mới.
     3. Gán email mới vào tài khoản qua /v1/shopee/addmail.
     """
-    proxy_candidates = get_candidate_proxies(proxy)
+    if strict_user_proxy:
+        if not proxy or not proxy.strip():
+            return {
+                "ok": False,
+                "error": "Bắt buộc phải có Proxy riêng của bạn để gán email. Vui lòng thêm proxy qua lệnh ADDPROXY!"
+            }
+        p_clean = proxy.strip()
+        if not p_clean.startswith("http://") and not p_clean.startswith("https://") and not p_clean.startswith("socks5://"):
+            p_clean = f"http://{p_clean}"
+        proxy_candidates = [p_clean]
+    else:
+        proxy_candidates = get_candidate_proxies(proxy)
+
     if not proxy_candidates:
         return {
             "ok": False,
-            "error": "Hệ thống chưa cấu hình Proxy kết nối Shopee. Vui lòng cấu hình PROXY_LIST hoặc DEFAULT_PROXY trong .env!"
+            "error": "Hệ thống chưa cấu hình Proxy kết nối Shopee. Vui lòng nạp Proxy riêng của bạn qua lệnh ADDPROXY!"
+        }
+
+    # Nếu tài khoản đã được gán email thành công trước đó và khách không yêu cầu đổi email cụ thể
+    if stock.assigned_email and stock.mail_status in ["added", "linked"] and not (custom_email and custom_email.strip()):
+        return {
+            "ok": True,
+            "already_linked": True,
+            "email": stock.assigned_email,
+            "password": stock.email_password or "",
+            "message": f"Tài khoản này đã có sẵn email liên kết: {stock.assigned_email}"
         }
 
     username = (stock.account or "").strip()
@@ -199,6 +231,8 @@ def add_email_to_shopee_account(
             }
             if custom_email and custom_email.strip():
                 payload["email"] = custom_email.strip()
+            else:
+                payload["mode"] = "random"
 
             res = call_shopee_core_api("/v1/shopee/addmail", method="POST", json_data=payload)
             err_text = str(res.get("error") or res.get("message") or "")
@@ -302,6 +336,8 @@ def add_email_to_shopee_account(
         }
         if custom_email and custom_email.strip():
             payload["email"] = custom_email.strip()
+        else:
+            payload["mode"] = "random"
 
         res = call_shopee_core_api("/v1/shopee/addmail", method="POST", json_data=payload)
         last_res = res

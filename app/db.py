@@ -12,9 +12,23 @@ connect_args = {}
 # Nếu dùng SQLite, cần check_same_thread = False để FastAPI chạy đa luồng
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+    engine_kwargs = {"connect_args": connect_args, "echo": False}
+elif DATABASE_URL.startswith("postgresql"):
+    connect_args = {"connect_timeout": 5}
+    engine_kwargs = {
+        "connect_args": connect_args,
+        "pool_size": 25,
+        "max_overflow": 50,
+        "pool_timeout": 30,
+        "pool_recycle": 1800,
+        "pool_pre_ping": True,
+        "echo": False
+    }
+else:
+    engine_kwargs = {"echo": False}
 
 try:
-    engine = create_engine(DATABASE_URL, connect_args=connect_args, echo=False)
+    engine = create_engine(DATABASE_URL, **engine_kwargs)
     # Test thử kết nối
     with engine.connect() as conn:
         pass

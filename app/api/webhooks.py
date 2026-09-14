@@ -242,3 +242,52 @@ async def zalo_webhook(
     return {"status": "ok"}
 
 
+# ==============================================================================
+# 3. WEBHOOK LOG BOT (BOT THÔNG BÁO GHI LOG - BENJABURG)
+# ==============================================================================
+
+@router.post("/logbot")
+async def logbot_webhook(request: Request):
+    """
+    Tiếp nhận sự kiện từ Bot Ghi Log.
+    Tự động bắt chat_id (cá nhân Sếp Song hoặc Nhóm Zalo) để làm kênh bắn log cố định.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "ok"}
+
+    message_obj = body.get("message", {}) if isinstance(body.get("message"), dict) else {}
+    from_user = message_obj.get("from") or body.get("from") or body.get("sender") or {}
+    chat_obj = message_obj.get("chat") or body.get("chat") or {}
+
+    raw_chat_id = (chat_obj.get("id") if isinstance(chat_obj, dict) else None) or body.get("chat_id")
+    if isinstance(from_user, dict):
+        raw_user_id = from_user.get("id") or body.get("user_id_by_app")
+    else:
+        raw_user_id = str(from_user) if from_user else body.get("user_id_by_app")
+
+    chat_id = str(raw_chat_id or raw_user_id or "")
+
+    if chat_id:
+        from app.services.log_notifier_service import set_log_chat_id, send_log_message
+        set_log_chat_id(chat_id)
+
+        reply_txt = (
+            "🔔 ［KÊNH GHI LOG HỆ THỐNG ĐÃ KÍCH HOẠT］🚀\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ Đã kết nối kênh nhận log này thành công! (Chat ID: {chat_id})\n\n"
+            "📌 Kể từ bây giờ, mọi hoạt động:\n"
+            "• Tiến trình Đăng ký tài khoản Shopee\n"
+            "• Giải Slider Captcha & Tỷ lệ thành công\n"
+            "• Cấp SIM tự động & Nhận mã OTP\n"
+            "• Cảnh báo Proxy hết hạn / chết\n"
+            "• Lỗi hệ thống Backend & Nạp kho\n\n"
+            "Sẽ tự động bắn trực tiếp về đây để Sếp Song theo dõi và xử lý ngay lập tức! ✨"
+        )
+        send_log_message(reply_txt)
+
+    return {"status": "ok"}
+
+
+
