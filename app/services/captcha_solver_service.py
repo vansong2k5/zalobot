@@ -831,13 +831,105 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
     return False
 
 
+async def click_verification_method_card(page, method_type: str = "Voice Call") -> bool:
+    """
+    Tìm và click chính xác 100% vào Card phương thức xác minh trên Shopee
+    (Ưu tiên Voice Call, fallback SMS, loại bỏ hoàn toàn Zalo).
+    Tự động xác định đúng Card Container bao quanh icon và text,
+    kích hoạt đồng thời cả DOM events và chuột vật lý Playwright tại tâm Card.
+    """
+    keywords = []
+    if method_type.lower().startswith("voice") or "call" in method_type.lower():
+        keywords = ["Voice Call", "voice call", "Cuộc gọi thoại", "cuộc gọi thoại", "Gọi cho tôi", "Call me", "Call Me"]
+    elif method_type.lower().startswith("sms"):
+        keywords = ["SMS", "Tin nhắn SMS", "tin nhắn sms", "Text Message", "Gửi qua SMS"]
+
+    eval_script = '''(kws) => {
+        let all = Array.from(document.querySelectorAll('div, button, a, span, p, li'));
+        for (let el of all) {
+            let directText = (el.innerText || '').trim();
+            let matched = false;
+            for (let kw of kws) {
+                if (directText === kw || directText.startsWith(kw)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (matched) {
+                // Tuyệt đối không dính vào Zalo
+                if (directText.includes('Zalo') || directText.includes('zalo')) {
+                    continue;
+                }
+                // Tìm thẻ Card Container cha hình chữ nhật có kích thước chuẩn
+                let card = el;
+                let cur = el;
+                for (let depth = 0; depth < 6; depth++) {
+                    if (!cur || cur === document.body) break;
+                    let rect = cur.getBoundingClientRect();
+                    if (rect.width >= 140 && rect.height >= 35 && rect.height <= 130) {
+                        card = cur;
+                        break;
+                    }
+                    cur = cur.parentElement;
+                }
+
+                card.scrollIntoView({ behavior: 'instant', block: 'center' });
+                let r = card.getBoundingClientRect();
+
+                try {
+                    card.click();
+                    card.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    card.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                    card.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                } catch(e) {}
+
+                return {
+                    found: true,
+                    x: r.x + r.width / 2,
+                    y: r.y + r.height / 2,
+                    width: r.width,
+                    height: r.height
+                };
+            }
+        }
+        return { found: false };
+    }'''
+
+    try:
+        res = await page.evaluate(eval_script, keywords)
+        if res and res.get("found"):
+            x, y = res["x"], res["y"]
+            logger.info("🎯 Đã định vị Card [%s] tại tọa độ (%.1f, %.1f)! Đang bấm chuột trực tiếp...", method_type, x, y)
+            await page.mouse.move(x, y)
+            await asyncio.sleep(0.1)
+            await page.mouse.click(x, y)
+            return True
+    except Exception as ex:
+        logger.debug("Lỗi click Card %s qua DOM: %s", method_type, ex)
+
+    # Fallback qua Playwright Locators
+    for kw in keywords:
+        try:
+            loc = page.locator(f"button:has-text('{kw}'), div[role='button']:has-text('{kw}'), :text-is('{kw}'), :text('{kw}')").first
+            if await loc.count() > 0 and await loc.is_visible():
+                box = await loc.bounding_box()
+                if box:
+                    await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    logger.info("🎯 Đã click Card [%s] qua Playwright locator với từ khóa '%s'!", method_type, kw)
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
 async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, notify_callback=None) -> Tuple[bool, str]:
     """
     Xử lý tự động toàn diện tất cả các cổng xác thực / rào cản của Shopee:
-    1. Modal "Chúng tôi sẽ gửi mã qua Zalo" -> Bấm 'Các phương pháp khác' -> Chọn 'Tin nhắn SMS'
-    2. Modal "Hoạt động bất thường được phát hiện" -> Bấm 'GỌI CHO TÔI'
-    3. Modal xác nhận SMS khác -> Bấm 'Gửi qua SMS'
-    4. Slider CAPTCHA (ghép hình) -> Tự động giải với 1D Slice Matching
+    1. Modal "Chúng tôi sẽ gửi mã qua Zalo" -> Bấm 'Các phương pháp khác' / 'Other Methods'
+    2. Màn hình "Select Verification Method" -> 100% Click Card 'Voice Call' (Fallback SMS, bỏ hoàn toàn Zalo)
+    3. Modal "Hoạt động bất thường được phát hiện" -> Bấm 'GỌI CHO TÔI'
+    4. Slider CAPTCHA (ghép hình) -> Tự động giải với Vision Ensemble v3
     5. Phát hiện màn hình 6 ô nhập mã OTP -> Hoàn thành cổng xác thực!
     6. Phát hiện lỗi số điện thoại bị từ chối / khóa -> Báo lỗi để đổi số mới
     """
@@ -938,12 +1030,6 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
 
         if has_zalo_modal:
             logger.info("⚙️ Phát hiện Popup Zalo! Bắt buộc bấm 'Các phương pháp khác' / 'Other Methods' để chuyển sang Gọi điện/SMS...")
-            if notify_callback:
-                try:
-                    await notify_callback("⚙️ Phát hiện yêu cầu gửi Zalo, đang tự động chuyển sang nhận mã qua Cuộc gọi thoại...")
-                except Exception:
-                    pass
-
             clicked_other = False
             try:
                 if await zalo_popup_btn.count() > 0 and await zalo_popup_btn.is_visible():
@@ -975,97 +1061,38 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
             await asyncio.sleep(2.0)
             continue
 
-        # 4B. Kiểm tra Màn hình "Chọn Phương thức xác minh" (Select Verification Method)
+        # 4B. Kiểm tra Màn hình "Select Verification Method" / "Chọn Phương thức xác minh"
         is_select_method_screen = False
         try:
             is_select_method_screen = await page.evaluate('''() => {
                 let t = document.body ? (document.body.innerText || '') : '';
-                return t.includes('Chọn Phương thức xác minh') || 
+                return t.includes('Select Verification Method') ||
+                       t.includes('Select one of the methods below') ||
+                       t.includes('Chọn Phương thức xác minh') || 
                        t.includes('Chọn một trong các phương thức') ||
-                       t.includes('Select Verification Method') ||
                        t.includes('Choose a verification method');
             }''')
         except Exception:
             pass
 
         if is_select_method_screen:
-            logger.info("👉 Phát hiện màn hình 'Chọn Phương thức xác minh'! Ưu tiên 100% Cuộc gọi thoại -> sau đó Tin nhắn SMS (Loại bỏ Zalo)...")
+            logger.info("👉 Phát hiện màn hình 'Select Verification Method'! Ưu tiên 100% Cuộc gọi thoại (Voice Call) -> sau đó Tin nhắn SMS (Bỏ Zalo)...")
             selected_method = None
 
-            # ƯU TIÊN 1 (100%): Cuộc gọi thoại (Voice Call / Gọi qua số điện thoại / Gọi cho tôi)
-            try:
-                call_card = page.locator(
-                    "text='Cuộc gọi thoại', text='Gọi cho tôi', text='Gọi qua số điện thoại', text='Voice Call', text='Voice call', text='Phone Call', text='Phone call', text='Call me'"
-                ).last
-                if await call_card.count() > 0 and await call_card.is_visible():
-                    c_box = await call_card.bounding_box()
-                    if c_box:
-                        await page.mouse.click(c_box["x"] + c_box["width"] / 2, c_box["y"] + c_box["height"] / 2)
-                    else:
-                        await call_card.click()
-                    selected_method = "VoiceCall"
-                    logger.info("📞 [Ưu tiên 1 - 100%] Đã chọn phương thức: Cuộc gọi thoại (Voice Call)!")
-            except Exception:
-                pass
-
-            if not selected_method:
-                found_call = await page.evaluate('''() => {
-                    let all = Array.from(document.querySelectorAll('div, span, p, button, a'));
-                    for (let el of all) {
-                        let t = (el.innerText || '').trim().toLowerCase();
-                        if (t.includes('cuộc gọi thoại') || t.includes('gọi cho tôi') || t.includes('voice call') || t.includes('phone call')) {
-                            el.click();
-                            if (el.parentElement) el.parentElement.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }''')
-                if found_call:
-                    selected_method = "VoiceCall"
-                    logger.info("📞 [Ưu tiên 1 - 100%] Đã kích hoạt 'Cuộc gọi thoại' qua DOM click!")
-
-            # ƯU TIÊN 2: Tin nhắn SMS (nếu không có phương thức gọi thoại)
-            if not selected_method:
-                try:
-                    sms_card = page.locator(
-                        "text='Tin nhắn SMS', text='Gửi qua SMS', text='SMS Text Message', text='Text Message', text='SMS'"
-                    ).last
-                    if await sms_card.count() > 0 and await sms_card.is_visible():
-                        c_box = await sms_card.bounding_box()
-                        if c_box:
-                            await page.mouse.click(c_box["x"] + c_box["width"] / 2, c_box["y"] + c_box["height"] / 2)
-                        else:
-                            await sms_card.click()
-                        selected_method = "SMS"
-                        logger.info("✅ [Ưu tiên 2] Không có gọi thoại, đã chọn thẻ 'Tin nhắn SMS'!")
-                except Exception:
-                    pass
-
-                if not selected_method:
-                    found_sms = await page.evaluate('''() => {
-                        let all = Array.from(document.querySelectorAll('div, span, p, button, a'));
-                        for (let el of all) {
-                            let t = (el.innerText || '').trim().toLowerCase();
-                            if (t === 'tin nhắn sms' || t === 'gửi qua sms' || t === 'sms' || t.includes('text message')) {
-                                el.click();
-                                if (el.parentElement) el.parentElement.click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    }''')
-                    if found_sms:
-                        selected_method = "SMS"
-                        logger.info("✅ [Ưu tiên 2] Đã kích hoạt 'Tin nhắn SMS' qua DOM click!")
+            # ƯU TIÊN 1 (100%): Cuộc gọi thoại (Voice Call)
+            ok_voice = await click_verification_method_card(page, "Voice Call")
+            if ok_voice:
+                selected_method = "VoiceCall"
+                logger.info("📞 [Ưu tiên 1 - 100%] Đã bấm trúng Card 'Voice Call'!")
+            else:
+                # ƯU TIÊN 2: Tin nhắn SMS (nếu trang không có Voice Call)
+                logger.warning("Không tìm thấy Card Voice Call, thử chọn Card SMS...")
+                ok_sms = await click_verification_method_card(page, "SMS")
+                if ok_sms:
+                    selected_method = "SMS"
+                    logger.info("✅ [Ưu tiên 2] Đã bấm trúng Card 'SMS'!")
 
             # TUYỆT ĐỐI KHÔNG CHỌN ZALO THEO YÊU CẦU CỦA SONG
-
-            if notify_callback and selected_method:
-                try:
-                    await notify_callback(f"📩 Đã kích hoạt phương thức xác minh: {selected_method}")
-                except Exception:
-                    pass
 
             await asyncio.sleep(1.5)
             # Nếu có nút 'Tiếp theo' hoặc 'Xác nhận' trong modal sau khi chọn thẻ
