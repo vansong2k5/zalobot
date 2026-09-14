@@ -98,40 +98,25 @@ def detect_shopee_holes_calibrated(bg_img: np.ndarray, piece_img: Optional[np.nd
         h_bg, w_bg = bg_img.shape[:2]
         gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(bg_img, cv2.COLOR_BGR2HSV)
-        v_chan = hsv[:, :, 2].astype(float)
+        s_chan = hsv[:, :, 1].astype(float) / 255.0  # Độ bão hòa màu [0..1]
+        v_chan = hsv[:, :, 2].astype(float)          # Độ sáng Value [0..255]
 
-        # 1. Multi-scale Black-Hat
+        # 1. Multi-scale Black-Hat bắt hố lõm tối
         k1 = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
         k2 = cv2.getStructuringElement(cv2.MORPH_RECT, (28, 28))
         k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (38, 38))
-        bh = (cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k1).astype(float) * 0.3 +
-              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k2).astype(float) * 0.4 +
-              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k3).astype(float) * 0.3)
+        bh = (cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k1).astype(float) * 0.35 +
+              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k2).astype(float) * 0.40 +
+              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k3).astype(float) * 0.25)
         bh[:, :34] = 0
         bh[:, 245:] = 0
 
-        # 2. Sobel gradient magnitude
+        # 2. Sobel Gradient Magnitude (Viền sắc nét xung quanh lỗ khuyết)
         sob_x = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
         sob_y = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
-        sob = sob_x + sob_y * 0.5
+        sob = sob_x + sob_y * 0.6
 
         pw, ph = 42, 42
-
-        # 3. Phân tích màu sắc lõi mảnh ghép nếu có (alpha > 140)
-        p_ratio = None
-        if piece_img is not None:
-            try:
-                if len(piece_img.shape) == 3 and piece_img.shape[2] == 4:
-                    alpha = piece_img[:, :, 3]
-                    mask = alpha > 140
-                    p_pix = piece_img[:, :, :3][mask]
-                else:
-                    p_pix = piece_img.reshape(-1, 3)
-                if len(p_pix) > 20:
-                    p_m = np.mean(p_pix, axis=0)
-                    p_ratio = p_m / (np.sum(p_m) + 1e-6)
-            except Exception:
-                pass
 
         # Xác định dải quét Y
         if y_dom is not None and 0 <= y_dom <= (h_bg - ph):
@@ -144,8 +129,8 @@ def detect_shopee_holes_calibrated(bg_img: np.ndarray, piece_img: Optional[np.nd
             y_step = 2
 
         scores = []
-        # Quét X từ 42px đến w_bg - pw - 6
-        for x in range(42, w_bg - pw - 6):
+        # Quét X từ 38px đến w_bg - pw - 6
+        for x in range(38, w_bg - pw - 6):
             best_sc = -999.0
             best_y = y_start
             for y in range(y_start, y_end, y_step):
@@ -154,26 +139,21 @@ def detect_shopee_holes_calibrated(bg_img: np.ndarray, piece_img: Optional[np.nd
                 std_val = float(np.std(gray[y:y+ph, x:x+pw]))
                 sob_mean = float(np.mean(sob[y:y+ph, x:x+pw]))
 
-                # Weber contrast
+                # Độ tương phản Weber: Vùng ngoài vs Vùng trong (Lỗ khuyết luôn tối hơn xung quanh)
                 pad = 6
                 y1_p, y2_p = max(0, y - pad), min(h_bg, y + ph + pad)
                 x1_p, x2_p = max(0, x - pad), min(w_bg, x + pw + pad)
                 outer_v = float(np.mean(v_chan[y1_p:y2_p, x1_p:x2_p]))
                 inner_v = float(np.mean(v_chan[y:y+ph, x:x+pw]))
-                contrast = max(0.0, outer_v - inner_v) / (outer_v + 35.0) * 80.0
+                contrast_sc = max(0.0, outer_v - inner_v) / (outer_v + 25.0) * 75.0
 
-                # Color match bonus
-                color_sc = 0.0
-                if p_ratio is not None:
-                    reg = bg_img[y:y+ph, x:x+pw]
-                    b_m = np.mean(reg, axis=(0, 1))
-                    b_ratio = b_m / (np.sum(b_m) + 1e-6)
-                    c_dist = float(np.sum(np.abs(p_ratio - b_ratio)))
-                    color_sc = max(0.0, (0.24 - c_dist) / 0.24) * 85.0
+                # Desaturation Score: Lỗ khuyết bị mất màu (chuyển sang tông xám mờ)
+                inner_sat = float(np.mean(s_chan[y:y+ph, x:x+pw]))
+                desat_sc = max(0.0, 1.0 - inner_sat) * 35.0
 
-                sc = (bh_mean * 1.8 + bh_max * 0.6 + 
-                      std_val * 1.5 + sob_mean * 2.2 + 
-                      contrast * 1.0 + color_sc)
+                sc = (bh_mean * 2.2 + bh_max * 0.8 + 
+                      std_val * 1.2 + sob_mean * 2.5 + 
+                      contrast_sc * 1.2 + desat_sc * 1.0)
 
                 if sc > best_sc:
                     best_sc = sc
@@ -183,7 +163,7 @@ def detect_shopee_holes_calibrated(bg_img: np.ndarray, piece_img: Optional[np.nd
         scores.sort(key=lambda s: s[1], reverse=True)
         peaks = []
         for x, sc, y in scores:
-            if not any(abs(p[0] - x) < 32 for p in peaks):
+            if not any(abs(p[0] - x) < 30 for p in peaks):
                 peaks.append((x, round(sc, 1)))
                 if len(peaks) >= 2:
                     break
@@ -717,76 +697,82 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
             # Dừng nghỉ 180ms - 220ms để browser layout ổn định
             await asyncio.sleep(random.uniform(0.18, 0.22))
 
-            # RADAR CLOSED-LOOP SUB-PIXEL TRACKING (Khóa khít tâm lỗ)
-            try:
-                real_tx = await page.evaluate('''() => {
-                    let piece = document.querySelector('canvas[width="44"]') || document.querySelector('div.HrMY5p canvas:not([width="280"])');
-                    let pieceContainer = document.querySelector('div[class*="_4U309i"]') || (piece ? piece.parentElement : null);
-                    if (!pieceContainer) return null;
-                    let st = pieceContainer.style.transform || pieceContainer.getAttribute('style') || '';
-                    if (st.includes('translateX(')) {
-                        return parseFloat(st.split('translateX(')[1].split('px')[0]);
-                    }
-                    if (st.includes('translate3d(')) {
-                        return parseFloat(st.split('translate3d(')[1].split('px')[0]);
-                    }
-                    return null;
-                }''')
-                if real_tx is not None:
-                    diff = target_tx - real_tx
-                    logger.info("📡 Radar Closed-Loop: Target TX=%.2f, Real TX=%.2f, Sai số diff=%.2fpx", target_tx, real_tx, diff)
-                    if abs(diff) > 0.85 and abs(diff) < 25.0:
-                        # Vi chỉnh nhẹ chuột với hệ số giảm chấn 0.65
-                        micro_dx = max(-3.0, min(3.0, diff * 0.65))
+            # RADAR CLOSED-LOOP SUB-PIXEL TRACKING: Vòng lặp vi chỉnh đa bước (tối đa 6 nhịp)
+            for r_step in range(6):
+                try:
+                    real_tx = await page.evaluate('''() => {
+                        let piece = document.querySelector('canvas[width="44"]') || document.querySelector('div.HrMY5p canvas:not([width="280"])');
+                        let pieceContainer = document.querySelector('div[class*="_4U309i"]') || (piece ? piece.parentElement : null);
+                        if (!pieceContainer) return null;
+                        let st = pieceContainer.style.transform || pieceContainer.getAttribute('style') || '';
+                        if (st.includes('translateX(')) {
+                            return parseFloat(st.split('translateX(')[1].split('px')[0]);
+                        }
+                        if (st.includes('translate3d(')) {
+                            return parseFloat(st.split('translate3d(')[1].split('px')[0]);
+                        }
+                        return null;
+                    }''')
+                    if real_tx is not None:
+                        diff = target_tx - real_tx
+                        logger.info("📡 [Radar Nhịp %d/6] Target TX=%.2f, Real TX=%.2f, Sai số diff=%.2fpx", r_step + 1, target_tx, real_tx, diff)
+                        if abs(diff) <= 0.85:
+                            logger.info("🎯 [Radar Lock] Đã khóa khít tâm lỗ khuyết (sai số %.2fpx)!", diff)
+                            break
+                        # Tính bước nhích chuột tỷ lệ thuận với diff (tối đa 12px)
+                        micro_dx = max(-12.0, min(12.0, diff * 0.72))
                         cur_x += micro_dx
                         await page.mouse.move(cur_x, cur_y)
-                        await asyncio.sleep(0.15)
-            except Exception as ex_radar:
-                logger.debug("Radar evaluate error: %s", ex_radar)
+                        await asyncio.sleep(0.08)
+                    else:
+                        break
+                except Exception as ex_radar:
+                    logger.debug("Radar evaluate error: %s", ex_radar)
+                    break
 
-            # Dừng nhẹ trước khi nhả chuột
-            await asyncio.sleep(random.uniform(0.15, 0.20))
+            # Dừng nhẹ 160ms trước khi nhả chuột
+            await asyncio.sleep(random.uniform(0.14, 0.18))
             await page.mouse.up()
             logger.info("👆 Đã nhả chuột ghép hình! Chờ Shopee xác thực...")
 
-            # 6. Chờ Shopee SecVerify phản hồi
-            await asyncio.sleep(2.5)
+            # 6. Chờ Shopee SecVerify phản hồi linh hoạt (tối đa 5s)
+            verify_res = {"status": "unknown"}
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                verify_res = await page.evaluate('''() => {
+                    let bodyText = document.body ? (document.body.innerText || '') : '';
 
-            # 7. KIỂM TRA TRẠNG THÁI THỰC SỰ (Chống False-Positive tuyệt đối)
-            verify_res = await page.evaluate('''() => {
-                let bodyText = document.body ? (document.body.innerText || '') : '';
+                    // 1. KIỂM TRA POPUP LỖI / BỊ CHẶN
+                    let isBlocked = bodyText.includes('Vui lòng thử lại sau') || 
+                                    bodyText.includes('Chưa thể hoàn tất xác thực') || 
+                                    bodyText.includes('Một lỗi đã xảy ra') || 
+                                    bodyText.includes('Thao tác quá thường xuyên') ||
+                                    (Array.from(document.querySelectorAll('button')).some(b => (b.innerText || '').trim() === 'Thử Lại'));
 
-                // 1. KIỂM TRA POPUP LỖI / BỊ CHẶN (Không bao giờ được coi là thành công)
-                let isBlocked = bodyText.includes('Vui lòng thử lại sau') || 
-                                bodyText.includes('Chưa thể hoàn tất xác thực') || 
-                                bodyText.includes('Một lỗi đã xảy ra') || 
-                                bodyText.includes('Thao tác quá thường xuyên') ||
-                                (Array.from(document.querySelectorAll('button')).some(b => (b.innerText || '').trim() === 'Thử Lại'));
+                    if (isBlocked) {
+                        return { status: 'blocked', reason: 'Shopee từ chối: Vui lòng thử lại sau' };
+                    }
 
-                if (isBlocked) {
-                    return { status: 'blocked', reason: 'Shopee từ chối: Vui lòng thử lại sau / Chưa thể hoàn tất xác thực' };
-                }
+                    // 2. KIỂM TRA TÍN HIỆU TIẾN VÀO BƯỚC TIẾP THEO (Thành công thật)
+                    let hasOtpInput = document.querySelectorAll('.shopee-pin-input input, input[autocomplete*="one-time-code"]').length >= 6;
+                    let hasZaloPopup = bodyText.includes('Chúng tôi sẽ gửi mã') || bodyText.includes('phương pháp khác');
+                    let hasSelectMethod = bodyText.includes('Chọn Phương thức xác minh') || bodyText.includes('Chọn một trong các phương thức');
+                    let hasPasswordScreen = bodyText.includes('Thiết lập mật khẩu');
+                    let hasAnomaly = bodyText.includes('Hoạt động bất thường');
 
-                // 2. KIỂM TRA TÍN HIỆU TIẾN VÀO BƯỚC TIẾP THEO (Thành công thật)
-                let hasOtpInput = document.querySelectorAll('.shopee-pin-input input, input[autocomplete*="one-time-code"]').length >= 6;
-                let hasZaloPopup = bodyText.includes('Chúng tôi sẽ gửi mã') || bodyText.includes('phương pháp khác');
-                let hasSelectMethod = bodyText.includes('Chọn Phương thức xác minh') || bodyText.includes('Chọn một trong các phương thức');
-                let hasPasswordScreen = bodyText.includes('Thiết lập mật khẩu');
-                let hasAnomaly = bodyText.includes('Hoạt động bất thường');
+                    if (hasOtpInput || hasZaloPopup || hasSelectMethod || hasPasswordScreen || hasAnomaly) {
+                        return { status: 'success', reason: 'Đã phát hiện màn hình tiếp theo' };
+                    }
 
-                if (hasOtpInput || hasZaloPopup || hasSelectMethod || hasPasswordScreen || hasAnomaly) {
-                    return { status: 'success', reason: 'Đã phát hiện màn hình tiếp theo' };
-                }
+                    // 3. Nếu canvas biến mất hoàn toàn -> thành công
+                    let bgCanvas = document.querySelector('canvas[width="280"]');
+                    if (!bgCanvas || bgCanvas.getBoundingClientRect().width === 0) {
+                        return { status: 'success', reason: 'Canvas Captcha đã đóng' };
+                    }
 
-                // 3. Nếu canvas vẫn còn hiển thị -> chưa khớp lỗ
-                let bgCanvas = document.querySelector('canvas[width="280"]');
-                let isBgVisible = bgCanvas && bgCanvas.getBoundingClientRect().width > 0;
-                if (isBgVisible) {
-                    return { status: 'mismatch', reason: 'Captcha vẫn còn trên màn hình (chưa khớp)' };
-                }
-
-                return { status: 'unknown', reason: 'Không có tín hiệu bước tiếp theo' };
-            }''')
+                }''')
+                if verify_res.get("status") in ("success", "blocked"):
+                    break
 
             v_status = verify_res.get("status")
             v_reason = verify_res.get("reason", "")
