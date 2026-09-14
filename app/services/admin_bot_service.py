@@ -718,7 +718,7 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
     # =========================================================================
     # 15. QUẢN LÝ DỪNG / BẢO TRÌ DỊCH VỤ & TÍNH NĂNG (BAOTRI / MO / DUNGSP / BATSP / DSSP / DSTN)
     # =========================================================================
-    if cmd in ["BAOTRI", "DUNGSP", "DUNG", "PAUSESP", "DUNGTN"]:
+    if cmd in ["BAOTRI"]:
         from .feature_service import SYSTEM_FEATURES, set_feature_status
         if len(parts) < 2:
             feat_list = ", ".join(SYSTEM_FEATURES.keys())
