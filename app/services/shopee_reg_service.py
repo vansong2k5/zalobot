@@ -241,6 +241,7 @@ class ShopeeRegService:
                     phone_num = provided_phone
                     self._update_db_log(record_id, phone_number=phone_num)
                 else:
+                    await notify(f"📱 {prefix}Đang thuê số điện thoại...", "1/4 Thuê SĐT")
                     logger.info("Đang kết nối ViOTP request số Shopee...")
                     ok_phone, phone_num, req_id, phone_msg = self.viotp.request_shopee_phone(services=[20, 7, 527])
                     if not ok_phone or not phone_num:
@@ -284,8 +285,8 @@ class ShopeeRegService:
                             await browser.close()
                             return {"ok": False, "step": "stopped", "error": "Đã dừng tiến trình theo yêu cầu của bạn (Lệnh STOP).", "should_refund": True}
 
-                        # LOG 2: Mở Shopee & Vượt bảo mật
-                        await notify(f"🛡️ {prefix}[2/4] Đang mở Shopee & tự động vượt xác thực bảo mật...", "2/4 Bảo mật")
+                        # LOG 2: Đang giải captcha
+                        await notify(f"🧩 {prefix}Đang giải captcha...", "2/4 Giải Captcha")
                         await page.goto("https://shopee.vn/buyer/signup", timeout=50000, wait_until="domcontentloaded")
                         await asyncio.sleep(2)
 
@@ -358,14 +359,13 @@ class ShopeeRegService:
                             self._update_db_log(record_id, status="failed", step_failed="captcha", error_msg=gate_info, logs=timeline_logs)
                             return {"ok": False, "step": "captcha", "error": f"❌ Không vượt qua được bước xác thực bảo mật: {gate_info}", "should_refund": True}
 
-                        # LOG 3: Chờ mã OTP
+                        # LOG 3: Nhập mã OTP
                         masked_p = phone_num[:4] + "***" + phone_num[-3:] if len(phone_num) >= 7 else phone_num
                         if provided_phone:
                             await notify(
-                                f"📩 {prefix}[3/4] Shopee đã gửi mã OTP về số {phone_num}!\n"
-                                f"👉 Soạn: OTP <mã> trong 90s để hoàn tất.\n"
-                                f"⚠️ Lưu ý: Đang ở bước tạo acc, lệnh STOP sẽ không hoàn phí dịch vụ.",
-                                "3/4 Chờ OTP",
+                                f"📩 {prefix}Shopee đã gửi mã OTP về số {phone_num}!\n"
+                                f"👉 Soạn: OTP <mã> trong 90s để hoàn tất.",
+                                "3/4 Nhập mã OTP",
                                 send_to_user=True
                             )
                             from app.services.task_manager import request_user_otp, wait_for_user_otp
@@ -378,8 +378,8 @@ class ShopeeRegService:
                                 return {"ok": False, "step": "otp", "error": "❌ Quá thời gian chờ nhập mã OTP từ bạn (90 giây).", "should_refund": True}
                         else:
                             await notify(
-                                f"📩 {prefix}[3/4] Đã nhận số {masked_p}, đang chờ mã xác thực OTP từ tổng đài...\n"
-                                f"⚠️ Lưu ý: Đã thuê số thành công. Nếu soạn STOP sẽ không hoàn tiền nick này.",
+                                f"📩 {prefix}Đang chờ nhận mã OTP ({masked_p})...\n"
+                                f"⚠️ Lưu ý: Đã thuê số, nếu soạn STOP hệ thống sẽ không hoàn phí thuê số của nick này.",
                                 "3/4 Chờ OTP"
                             )
                             ok_otp, otp_code, otp_msg = self.viotp.poll_otp(req_id, timeout_seconds=150, interval=4)
@@ -392,8 +392,13 @@ class ShopeeRegService:
                                 self._update_db_log(record_id, status="failed", step_failed="otp", error_msg=otp_msg, logs=timeline_logs)
                                 return {"ok": False, "step": "otp", "error": f"❌ Hệ thống đã thử {max_phone_tries} đầu số liên tiếp nhưng chưa nhận được mã xác thực OTP từ tổng đài.", "should_refund": True}
 
-                        # LOG 4: Nhập OTP & Hoàn tất tài khoản
-                        await notify(f"🔑 {prefix}[4/4] Đã nhận OTP! Đang thiết lập mật khẩu & hoàn tất tài khoản...", "4/4 Hoàn tất")
+                        # ĐÁNH DẤU ĐÃ NHẬN OTP THÀNH CÔNG -> KHÔNG CHO PHÉP DÙNG LỆNH STOP
+                        if zalo_user_id:
+                            from app.services.task_manager import set_user_task_otp_received
+                            set_user_task_otp_received(str(zalo_user_id))
+
+                        # LOG 4: Tạo tài khoản
+                        await notify(f"🔑 {prefix}Đang tạo tài khoản & lưu dữ liệu...", "4/4 Tạo tài khoản")
 
                         # Điền OTP vào 6 ô input
                         try:

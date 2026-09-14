@@ -39,7 +39,8 @@ def start_user_task(zalo_user_id: str, task_name: str) -> bool:
             "current_step": "Khởi động...",
             "stop_requested": False,
             "phone_rented": False,
-            "rented_phone": None
+            "rented_phone": None,
+            "otp_received": False
         }
         return True
 
@@ -58,6 +59,23 @@ def set_user_task_phone_rented(zalo_user_id: str, phone: str):
             _active_user_tasks[zalo_user_id]["phone_rented"] = True
             _active_user_tasks[zalo_user_id]["rented_phone"] = phone
             _active_user_tasks[zalo_user_id]["current_step"] = f"Chờ mã OTP ({phone})"
+
+
+def set_user_task_otp_received(zalo_user_id: str):
+    """Đánh dấu đã nhận thành công mã OTP, khóa không cho phép dùng lệnh STOP."""
+    with _lock:
+        if zalo_user_id in _active_user_tasks:
+            _active_user_tasks[zalo_user_id]["otp_received"] = True
+            _active_user_tasks[zalo_user_id]["current_step"] = "Tạo tài khoản & Đặt mật khẩu"
+
+
+def is_task_otp_received(zalo_user_id: str) -> bool:
+    """Kiểm tra xem tác vụ đã nhận mã OTP thành công hay chưa."""
+    with _lock:
+        task = _active_user_tasks.get(zalo_user_id)
+        if task:
+            return task.get("otp_received", False)
+        return False
 
 
 def is_task_phone_rented(zalo_user_id: str) -> Tuple[bool, Optional[str]]:

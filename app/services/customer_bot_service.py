@@ -24,6 +24,7 @@ from .task_manager import (
     finish_user_task,
     is_stop_requested,
     is_task_phone_rented,
+    is_task_otp_received,
     is_waiting_for_otp,
     submit_user_otp,
 )
@@ -219,6 +220,18 @@ def handle_zalo_user_message(
     if first_word == "STOP":
         busy, task_info = is_user_busy(user_task_key)
         if busy:
+            # Nếu đã nhận thành công mã OTP -> KHÔNG ĐƯỢC DÙNG LỆNH STOP
+            if is_task_otp_received(user_task_key):
+                send_zalo_message(
+                    zalo_user_id,
+                    "⚠️ KHÔNG THỂ DỪNG TIẾN TRÌNH LÚC NÀY!\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Hệ thống ĐÃ NHẬN THÀNH CÔNG MÃ OTP và đang trong bước tạo tài khoản.\n"
+                    "Lệnh STOP không được phép sử dụng ở bước này vì sẽ làm mất tiền và không được hoàn lại!\n"
+                    "👉 Vui lòng đợi vài giây để bot hoàn tất lưu tài khoản cho bạn nhé. ✨"
+                )
+                return
+
             request_stop_user_task(user_task_key)
             is_rented, r_phone = is_task_phone_rented(user_task_key)
             phone_notice = ""
@@ -260,26 +273,6 @@ def handle_zalo_user_message(
             if ok_sub:
                 send_zalo_message(zalo_user_id, f"✅ Đã tiếp nhận mã OTP: {otp_candidate}! Đang tiến hành xác thực trên Shopee...")
                 return
-
-    # -------------------------------------------------------------------------
-    # QUY TẮC: CHỈ CHO PHÉP 1 TIẾN TRÌNH / USER TẠI MỘT THỜI ĐIỂM
-    # Nếu đang chạy tiến trình nặng (Reg Shopee, Quét SĐT...), chặn các thao tác khác
-    # -------------------------------------------------------------------------
-    busy, task_info = is_user_busy(user_task_key)
-    if busy:
-        elapsed = int((datetime.now() - task_info.get("started_at", datetime.now())).total_seconds())
-        current_step = task_info.get("current_step", "Đang xử lý...")
-        send_zalo_message(
-            zalo_user_id,
-            f"⚠️ 𝐁Ạ𝐍 Đ𝐀𝐍𝐆 𝐂Ó 𝟏 𝐓𝐈Ế𝐍 𝐓𝐑Ì𝐍𝐇 Đ𝐀𝐍𝐆 𝐂𝐇Ạ𝐘!\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 Nhiệm vụ: {task_info.get('task_name')}\n"
-            f"📍 Tiến độ: {current_step}\n"
-            f"⏱️ Thời gian chạy: {elapsed}s\n\n"
-            f"🔒 Để đảm bảo an toàn IP và tránh nghẽn tài nguyên, hệ thống CHỈ CHO PHÉP 1 TIẾN TRÌNH / NGƯỜI DÙNG.\n\n"
-            f"👉 Nếu muốn hủy tiến trình hiện tại để thực hiện thao tác khác, vui lòng soạn: STOP"
-        )
-        return
 
     # Lệnh lưu/kích hoạt nhóm trực tiếp khi gõ trong Group
     if is_group_chat and first_word == "SETGROUP":
