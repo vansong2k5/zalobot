@@ -715,55 +715,130 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
         return True
 
     # =========================================================================
-    # 15. QUẢN LÝ DỪNG / MỞ DỊCH VỤ (DUNGSP / BATSP / DSSP) - CHỈ ADMIN
     # =========================================================================
-    if cmd in ["DUNGSP", "DUNG", "PAUSESP", "STOPDV"]:
-        if len(parts) < 2 or not parts[1].isdigit():
-            send_zalo_message(zalo_user_id, "⚠️ Cú pháp: DUNGSP <Mã SP>\nVí dụ: DUNGSP 1 (để tạm dừng dịch vụ số 1)")
+    # 15. QUẢN LÝ DỪNG / BẢO TRÌ DỊCH VỤ & TÍNH NĂNG (BAOTRI / MO / DUNGSP / BATSP / DSSP / DSTN)
+    # =========================================================================
+    if cmd in ["BAOTRI", "DUNGSP", "DUNG", "PAUSESP", "STOPDV", "KHOASP", "DUNGTN", "DUNG_TINHNANG", "PAUSETN", "STOPTN"]:
+        from .feature_service import SYSTEM_FEATURES, set_feature_status
+        if len(parts) < 2:
+            feat_list = ", ".join(SYSTEM_FEATURES.keys())
+            send_zalo_message(
+                zalo_user_id,
+                f"🛠️ CÚ PHÁP TẠM DỪNG / BẢO TRÌ:\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👉 Dừng 1 dịch vụ (theo số mã):\n"
+                f"   • BAOTRI <Mã SP> (Ví dụ: BAOTRI 6 để dừng Thuê SIM ViOTP)\n\n"
+                f"👉 Dừng 1 tính năng toàn bot:\n"
+                f"   • BAOTRI <Mã TN> (Ví dụ: BAOTRI OTP hoặc BAOTRI BUY)\n"
+                f"   • Mã hỗ trợ: {feat_list}\n\n"
+                f"📌 Xem danh sách SP: DSSP | Xem tính năng: DSTN"
+            )
             return True
 
-        p_id = int(parts[1])
-        prod = db.query(Product).filter(Product.id == p_id).first()
-        if not prod:
-            send_zalo_message(zalo_user_id, f"❌ Không tìm thấy dịch vụ/sản phẩm có mã [{p_id}]!")
+        target_arg = parts[1].strip()
+
+        # Trường hợp 1: Bảo trì theo Mã Sản Phẩm (Số: 1, 2, 6, 7...)
+        if target_arg.isdigit():
+            p_id = int(target_arg)
+            prod = db.query(Product).filter(Product.id == p_id).first()
+            if not prod:
+                send_zalo_message(zalo_user_id, f"❌ Không tìm thấy dịch vụ/sản phẩm có mã [{p_id}]!")
+                return True
+
+            prod.status = "paused"
+            db.commit()
+            db.refresh(prod)
+            send_zalo_message(
+                zalo_user_id,
+                f"🛑 [ADMIN] ĐÃ CHUYỂN DỊCH VỤ SANG BẢO TRÌ!\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📦 Dịch vụ: [{prod.id}] {prod.product_name}\n"
+                f"💰 Giá: {int(prod.price):,} VNĐ\n"
+                f"⚠️ Trạng thái: 🔴 TẠM DỪNG (Khách bấm mua sẽ bị chặn và báo đang bảo trì)\n\n"
+                f"👉 Mở lại dịch vụ bất kỳ lúc nào bằng lệnh: MO {prod.id} (hoặc BATSP {prod.id})"
+            )
             return True
 
-        prod.status = "paused"
-        db.commit()
-        db.refresh(prod)
-        send_zalo_message(
-            zalo_user_id,
-            f"🛑 [ADMIN] ĐÃ TẠM DỪNG DỊCH VỤ THÀNH CÔNG!\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📦 Dịch vụ: [{prod.id}] {prod.product_name}\n"
-            f"💰 Giá: {int(prod.price):,} VNĐ\n"
-            f"⚠️ Trạng thái: 🔴 TẠM DỪNG (Khách hàng sẽ không thể đặt mua dịch vụ này)\n\n"
-            f"👉 Mở lại dịch vụ bất kỳ lúc nào bằng lệnh: BATSP {prod.id}"
-        )
+        # Trường hợp 2: Bảo trì theo Mã Tính Năng (BUY, OTP, CHECKSDT, DONHANG, PROXY, TRACK...)
+        feat_code = target_arg.upper()
+        if feat_code in SYSTEM_FEATURES:
+            ok = set_feature_status(db, feat_code, is_active=False)
+            feat_info = SYSTEM_FEATURES[feat_code]
+            if ok:
+                send_zalo_message(
+                    zalo_user_id,
+                    f"🛑 [ADMIN] ĐÃ TẠM DỪNG TÍNH NĂNG THÀNH CÔNG!\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚙️ Tính năng: [{feat_code}] {feat_info['name']}\n"
+                    f"📝 Chi tiết: {feat_info['desc']}\n"
+                    f"⚠️ Trạng thái: 🔴 TẠM DỪNG (Khách dùng tính năng này sẽ nhận thông báo bảo trì)\n\n"
+                    f"👉 Mở lại tính năng bất kỳ lúc nào bằng lệnh: MO {feat_code} (hoặc BATTN {feat_code})"
+                )
+            else:
+                send_zalo_message(zalo_user_id, f"❌ Lỗi khi cập nhật trạng thái tính năng {feat_code}!")
+            return True
+
+        send_zalo_message(zalo_user_id, f"❌ Mã '{target_arg}' không khớp với mã SP (số) hoặc mã tính năng nào! Nhắn DSSP hoặc DSTN để xem.")
         return True
 
-    if cmd in ["BATSP", "BAT", "RESUMESP", "STARTDV"]:
-        if len(parts) < 2 or not parts[1].isdigit():
-            send_zalo_message(zalo_user_id, "⚠️ Cú pháp: BATSP <Mã SP>\nVí dụ: BATSP 1 (để mở lại dịch vụ số 1)")
+    if cmd in ["MO", "BAT", "BATSP", "RESUMESP", "STARTDV", "MOSP", "BATTN", "BAT_TINHNANG", "RESUMETN", "STARTTN", "MOTN"]:
+        from .feature_service import SYSTEM_FEATURES, set_feature_status
+        if len(parts) < 2:
+            feat_list = ", ".join(SYSTEM_FEATURES.keys())
+            send_zalo_message(
+                zalo_user_id,
+                f"🟢 CÚ PHÁP MỞ LẠI DỊCH VỤ / TÍNH NĂNG:\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👉 Mở lại 1 dịch vụ (theo số mã):\n"
+                f"   • MO <Mã SP> (Ví dụ: MO 6 để mở lại Thuê SIM ViOTP)\n\n"
+                f"👉 Mở lại 1 tính năng toàn bot:\n"
+                f"   • MO <Mã TN> (Ví dụ: MO OTP hoặc MO BUY)\n"
+                f"   • Mã hỗ trợ: {feat_list}"
+            )
             return True
 
-        p_id = int(parts[1])
-        prod = db.query(Product).filter(Product.id == p_id).first()
-        if not prod:
-            send_zalo_message(zalo_user_id, f"❌ Không tìm thấy dịch vụ/sản phẩm có mã [{p_id}]!")
+        target_arg = parts[1].strip()
+
+        # Trường hợp 1: Mở lại theo Mã Sản Phẩm (Số)
+        if target_arg.isdigit():
+            p_id = int(target_arg)
+            prod = db.query(Product).filter(Product.id == p_id).first()
+            if not prod:
+                send_zalo_message(zalo_user_id, f"❌ Không tìm thấy dịch vụ/sản phẩm có mã [{p_id}]!")
+                return True
+
+            prod.status = "active"
+            db.commit()
+            db.refresh(prod)
+            send_zalo_message(
+                zalo_user_id,
+                f"🟢 [ADMIN] ĐÃ MỞ LẠI DỊCH VỤ THÀNH CÔNG! 🎉\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📦 Dịch vụ: [{prod.id}] {prod.product_name}\n"
+                f"💰 Giá: {int(prod.price):,} VNĐ\n"
+                f"📶 Trạng thái: 🟢 ĐANG HOẠT ĐỘNG (Khách hàng có thể đặt mua bình thường)"
+            )
             return True
 
-        prod.status = "active"
-        db.commit()
-        db.refresh(prod)
-        send_zalo_message(
-            zalo_user_id,
-            f"🟢 [ADMIN] ĐÃ MỞ LẠI DỊCH VỤ THÀNH CÔNG! 🎉\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📦 Dịch vụ: [{prod.id}] {prod.product_name}\n"
-            f"💰 Giá: {int(prod.price):,} VNĐ\n"
-            f"📶 Trạng thái: 🟢 ĐANG HOẠT ĐỘNG (Khách hàng có thể đặt mua bình thường)"
-        )
+        # Trường hợp 2: Mở lại theo Mã Tính Năng
+        feat_code = target_arg.upper()
+        if feat_code in SYSTEM_FEATURES:
+            ok = set_feature_status(db, feat_code, is_active=True)
+            feat_info = SYSTEM_FEATURES[feat_code]
+            if ok:
+                send_zalo_message(
+                    zalo_user_id,
+                    f"🟢 [ADMIN] ĐÃ MỞ LẠI TÍNH NĂNG THÀNH CÔNG! 🎉\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚙️ Tính năng: [{feat_code}] {feat_info['name']}\n"
+                    f"📝 Chi tiết: {feat_info['desc']}\n"
+                    f"📶 Trạng thái: 🟢 HOẠT ĐỘNG BÌNH THƯỜNG (Khách hàng có thể sử dụng lại)"
+                )
+            else:
+                send_zalo_message(zalo_user_id, f"❌ Lỗi khi cập nhật trạng thái tính năng {feat_code}!")
+            return True
+
+        send_zalo_message(zalo_user_id, f"❌ Mã '{target_arg}' không khớp với mã SP (số) hoặc mã tính năng nào!")
         return True
 
     if cmd in ["DSSP", "SANPHAM", "LISTSP"]:
@@ -775,95 +850,16 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
         lines = ["📦 𝐃𝐀𝐍𝐇 𝐒Á𝐂𝐇 𝐓Ấ𝐓 𝐂Ả 𝐃Ị𝐂𝐇 𝐕Ụ / 𝐒Ả𝐍 𝐏𝐇Ẩ𝐌:"]
         for p in prods:
             st_icon = "🟢" if p.status == "active" else "🔴"
-            st_label = "Hoạt động" if p.status == "active" else "TẠM DỪNG"
+            st_label = "Hoạt động" if p.status == "active" else "TẠM DỪNG (Bảo trì)"
             lines.append(f"• [{p.id}] {st_icon} {p.product_name} — {int(p.price):,}đ ({st_label})")
 
         lines.extend([
             "",
             "👉 THAO TÁC QUẢN TRỊ:",
-            "• Dừng dịch vụ: DUNGSP <Mã SP>",
-            "• Mở lại dịch vụ: BATSP <Mã SP>"
+            "• Bảo trì dịch vụ: BAOTRI <Mã SP> (vd: BAOTRI 6)",
+            "• Mở lại dịch vụ: MO <Mã SP> (vd: MO 6)"
         ])
         send_zalo_message(zalo_user_id, "\n".join(lines))
-        return True
-
-    # =========================================================================
-    # 16. QUẢN LÝ DỪNG / MỞ TÍNH NĂNG BOT (DUNGTN / BATTN / DSTN) - CHỈ ADMIN
-    # =========================================================================
-    if cmd in ["DUNGTN", "DUNG_TINHNANG", "PAUSETN", "STOPTN"]:
-        from .feature_service import SYSTEM_FEATURES, set_feature_status
-        if len(parts) < 2:
-            feat_list = ", ".join(SYSTEM_FEATURES.keys())
-            send_zalo_message(
-                zalo_user_id,
-                f"⚠️ Cú pháp: DUNGTN <Mã tính năng>\n\n"
-                f"📌 Danh sách mã tính năng hỗ trợ:\n{feat_list}\n\n"
-                f"👉 Ví dụ: DUNGTN CHECKSDT (để dừng tính năng check SĐT Shopee)\n"
-                f"👉 Ví dụ: DUNGTN QUICK_BUY (để tắt tính năng gõ số nhanh)"
-            )
-            return True
-
-        feat_code = parts[1].strip().upper()
-        if feat_code not in SYSTEM_FEATURES:
-            feat_list = ", ".join(SYSTEM_FEATURES.keys())
-            send_zalo_message(
-                zalo_user_id,
-                f"❌ Mã tính năng '{feat_code}' không hợp lệ!\n"
-                f"📌 Các tính năng khả dụng: {feat_list}"
-            )
-            return True
-
-        ok = set_feature_status(db, feat_code, is_active=False)
-        feat_info = SYSTEM_FEATURES[feat_code]
-        if ok:
-            send_zalo_message(
-                zalo_user_id,
-                f"🛑 [ADMIN] ĐÃ TẠM DỪNG TÍNH NĂNG THÀNH CÔNG!\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚙️ Tính năng: [{feat_code}] {feat_info['name']}\n"
-                f"📝 Chi tiết: {feat_info['desc']}\n"
-                f"⚠️ Trạng thái: 🔴 TẠM DỪNG (Khách dùng tính năng này sẽ nhận thông báo bảo trì)\n\n"
-                f"👉 Mở lại tính năng bất kỳ lúc nào bằng lệnh: BATTN {feat_code}"
-            )
-        else:
-            send_zalo_message(zalo_user_id, f"❌ Lỗi khi cập nhật trạng thái tính năng {feat_code}!")
-        return True
-
-    if cmd in ["BATTN", "BAT_TINHNANG", "RESUMETN", "STARTTN"]:
-        from .feature_service import SYSTEM_FEATURES, set_feature_status
-        if len(parts) < 2:
-            feat_list = ", ".join(SYSTEM_FEATURES.keys())
-            send_zalo_message(
-                zalo_user_id,
-                f"⚠️ Cú pháp: BATTN <Mã tính năng>\n\n"
-                f"📌 Danh sách mã tính năng hỗ trợ:\n{feat_list}\n\n"
-                f"👉 Ví dụ: BATTN CHECKSDT"
-            )
-            return True
-
-        feat_code = parts[1].strip().upper()
-        if feat_code not in SYSTEM_FEATURES:
-            feat_list = ", ".join(SYSTEM_FEATURES.keys())
-            send_zalo_message(
-                zalo_user_id,
-                f"❌ Mã tính năng '{feat_code}' không hợp lệ!\n"
-                f"📌 Các tính năng khả dụng: {feat_list}"
-            )
-            return True
-
-        ok = set_feature_status(db, feat_code, is_active=True)
-        feat_info = SYSTEM_FEATURES[feat_code]
-        if ok:
-            send_zalo_message(
-                zalo_user_id,
-                f"🟢 [ADMIN] ĐÃ MỞ LẠI TÍNH NĂNG THÀNH CÔNG! 🎉\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚙️ Tính năng: [{feat_code}] {feat_info['name']}\n"
-                f"📝 Chi tiết: {feat_info['desc']}\n"
-                f"📶 Trạng thái: 🟢 HOẠT ĐỘNG BÌNH THƯỜNG (Khách hàng có thể sử dụng lại)"
-            )
-        else:
-            send_zalo_message(zalo_user_id, f"❌ Lỗi khi cập nhật trạng thái tính năng {feat_code}!")
         return True
 
     if cmd in ["DSTN", "FEATURES", "TINHNANG", "FLAGS"]:
@@ -879,10 +875,10 @@ def handle_admin_message(db: Session, zalo_user_id: str, text: str) -> bool:
 
         lines.extend([
             "👉 THAO TÁC NHANH:",
-            "• Dừng 1 tính năng: DUNGTN <Mã TN> (vd: DUNGTN CHECKSDT)",
-            "• Bật lại tính năng: BATTN <Mã TN> (vd: BATTN CHECKSDT)",
-            "• Dừng 1 dịch vụ: DUNGSP <Mã SP> (vd: DUNGSP 1)",
-            "• Bật lại dịch vụ: BATSP <Mã SP> (vd: BATSP 1)"
+            "• Bảo trì tính năng: BAOTRI <Mã TN> (vd: BAOTRI OTP)",
+            "• Mở lại tính năng: MO <Mã TN> (vd: MO OTP)",
+            "• Bảo trì dịch vụ: BAOTRI <Mã SP> (vd: BAOTRI 6)",
+            "• Mở lại dịch vụ: MO <Mã SP> (vd: MO 6)"
         ])
         send_zalo_message(zalo_user_id, "\n".join(lines))
         return True

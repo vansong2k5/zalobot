@@ -718,15 +718,15 @@ def handle_zalo_user_message(
             send_zalo_message(zalo_user_id, f"❌ Không tìm thấy sản phẩm mã [{product_id}]. Nhắn 'MENU' để xem danh sách nhé!")
             return
 
-        # Kiểm tra nếu dịch vụ đang bị Admin tạm dừng
+        # Kiểm tra nếu dịch vụ đang bị Admin tạm dừng / bảo trì
         if product.status != "active":
             send_zalo_message(
                 zalo_user_id,
-                f"⛔ DỊCH VỤ ĐANG TẠM DỪNG PHỤC VỤ!\n"
+                f"🛠️ DỊCH VỤ ĐANG TẠM DỪNG BẢO TRÌ!\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"📦 Dịch vụ: [{product.id}] {product.product_name}\n"
-                f"⚠️ Trạng thái: 🔴 Tạm dừng nhận đơn để bảo trì/nâng cấp.\n\n"
-                f"👉 Vui lòng chọn dịch vụ khác trong 'MENU' hoặc quay lại sau nhé! ✨"
+                f"🔧 Trạng thái: 🔴 Tạm ngưng nhận đơn để bảo trì/nâng cấp.\n\n"
+                f"👉 Bạn vui lòng quay lại sau ít phút hoặc nhắn 'MENU' để chọn dịch vụ khác nhé! ✨"
             )
             return
 
