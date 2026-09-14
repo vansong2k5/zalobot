@@ -180,9 +180,8 @@ class ShopeeRegService:
                 log_step(f"{prefix}Bắt đầu khởi động worker đăng ký tài khoản...")
 
             # -------------------------------------------------------------
-            # BƯỚC 1: Validate Proxy
+            # BƯỚC 1: Validate Proxy (Log âm thầm vào file, không spam Zalo)
             # -------------------------------------------------------------
-            await notify("🔍 [Giai đoạn 1/6] Đang kết nối đường truyền mạng riêng bảo mật...", "1/6 Kết nối mạng")
             is_p_valid, p_msg, p_info = validate_proxy_connection(user_proxy)
             if not is_p_valid:
                 self._update_db_log(record_id, status="failed", step_failed="proxy", error_msg=p_msg, logs=timeline_logs)
@@ -226,24 +225,23 @@ class ShopeeRegService:
                 launch_kwargs["channel"] = "chrome"
 
             # -------------------------------------------------------------
-            # VÒNG LẶP THỬ TỐI ĐA 3 ĐẦU SỐ (Nếu số trước không về OTP sau 150s)
+            # VÒNG LẶP THỬ TỐI ĐA 3 ĐẦU SỐ
             # -------------------------------------------------------------
             for phone_try in range(1, max_phone_tries + 1):
                 if zalo_user_id and is_stop_requested(zalo_user_id):
                     return {"ok": False, "step": "stopped", "error": "Đã dừng tiến trình theo yêu cầu của bạn (Lệnh STOP).", "should_refund": True}
 
                 if phone_try > 1:
-                    await notify(f"🔄 [Lần thử {phone_try}/{max_phone_tries}] Đầu số phản hồi chậm sau 150s, đang tự động kết nối đầu số khác...", f"Thử số {phone_try}")
+                    logger.info(f"🔄 [Lần thử {phone_try}/{max_phone_tries}] Thử kết nối đầu số khác...")
                     await asyncio.sleep(2)
 
-                # BƯỚC 2: Cấp số điện thoại (Bảo mật: Không show số tạm thời lên Zalo của khách)
+                # BƯỚC 2: Cấp số điện thoại
                 req_id = None
                 if provided_phone:
                     phone_num = provided_phone
                     self._update_db_log(record_id, phone_number=phone_num)
-                    await notify(f"📱 [Giai đoạn 2/6] Sử dụng số điện thoại của bạn: {phone_num}", "2/6 SĐT của bạn")
                 else:
-                    await notify("Đang kết nối tổng đài và xác thực tài khoản...", "2/6 Kết nối")
+                    logger.info("Đang kết nối ViOTP request số Shopee...")
                     ok_phone, phone_num, req_id, phone_msg = self.viotp.request_shopee_phone(services=[20, 7, 527])
                     if not ok_phone or not phone_num:
                         log_step(f"Lỗi cấp số lần {phone_try}: {phone_msg}")
@@ -251,13 +249,18 @@ class ShopeeRegService:
                             await asyncio.sleep(3)
                             continue
                         self._update_db_log(record_id, status="failed", step_failed="phone", error_msg=phone_msg, logs=timeline_logs)
-                        return {"ok": False, "step": "phone", "error": "❌ Hệ thống tổng đài tạm thời hết đầu số. Vui lòng thử lại sau ít phút!", "should_refund": True}
+                        return {"ok": False, "step": "phone", "error": "❌ Tổng đài tạm thời hết đầu số khả dụng. Vui lòng thử lại sau!", "should_refund": True}
 
                     self._update_db_log(record_id, phone_number=phone_num)
                     log_step(f"Đã cấp số an toàn: {phone_num}")
 
                 from app.services.viotp_service import normalize_vietnamese_phone
                 phone_num = normalize_vietnamese_phone(phone_num)
+
+                # Đánh dấu đã thuê số thành công vào task_manager
+                if zalo_user_id:
+                    from app.services.task_manager import set_user_task_phone_rented
+                    set_user_task_phone_rented(str(zalo_user_id), phone_num)
 
                 # BƯỚC 3 & 4: Mở Shopee, nhập số & Vượt Captcha
                 async with async_playwright() as p:
@@ -281,12 +284,12 @@ class ShopeeRegService:
                             await browser.close()
                             return {"ok": False, "step": "stopped", "error": "Đã dừng tiến trình theo yêu cầu của bạn (Lệnh STOP).", "should_refund": True}
 
-                        await notify("🌐 [Giai đoạn 3/6] Đang truy cập cổng đăng ký Shopee...", "3/6 Mở Shopee")
+                        # LOG 2: Mở Shopee & Vượt bảo mật
+                        await notify(f"🛡️ {prefix}[2/4] Đang mở Shopee & tự động vượt xác thực bảo mật...", "2/4 Bảo mật")
                         await page.goto("https://shopee.vn/buyer/signup", timeout=50000, wait_until="domcontentloaded")
                         await asyncio.sleep(2)
 
-                        # Nhập số điện thoại (Bảo mật: Ẩn số thô trên thông báo)
-                        await notify("🌐 [Giai đoạn 3/6] Đang thiết lập phiên đăng ký bảo mật...", "3/6 Nhập thông tin")
+                        # Nhập số điện thoại
                         phone_input = page.locator("input[name='phone'], input[placeholder*='Số điện thoại'], input[autocomplete='tel']").first
                         await phone_input.wait_for(state="visible", timeout=35000)
                         await phone_input.click()
@@ -342,12 +345,10 @@ class ShopeeRegService:
                             self._update_db_log(record_id, status="failed", step_failed="phone_reject", error_msg=err_text, logs=timeline_logs)
                             return {"ok": False, "step": "phone_reject", "error": f"❌ Shopee thông báo: {err_text}", "should_refund": True}
 
-                        # BƯỚC 4: Toàn quyền xử lý tất cả các cổng xác thực (Captcha trượt, Popup Zalo, Cuộc gọi, SMS)
-                        await notify("🛡️ [Giai đoạn 4/6] Đang tự động xử lý xác thực bảo mật tài khoản...", "4/6 Xác thực bảo mật")
+                        # Xử lý tất cả các cổng xác thực (Captcha trượt, Popup Zalo, Cuộc gọi thoại, SMS)
                         gate_ok, gate_info = await handle_shopee_verification_gate(
                             page,
-                            max_wait_seconds=65,
-                            notify_callback=lambda msg: notify(f"🛡️ [Giai đoạn 4/6] {msg}", "4/6 Xác thực")
+                            max_wait_seconds=65
                         )
                         if not gate_ok:
                             log_step(f"Không vượt qua cổng xác thực ở đầu số {phone_num}: {gate_info}")
@@ -357,14 +358,14 @@ class ShopeeRegService:
                             self._update_db_log(record_id, status="failed", step_failed="captcha", error_msg=gate_info, logs=timeline_logs)
                             return {"ok": False, "step": "captcha", "error": f"❌ Không vượt qua được bước xác thực bảo mật: {gate_info}", "should_refund": True}
 
-                        await notify("✅ [Giai đoạn 4/6] Đã thông qua cổng xác thực bảo mật! Hệ thống đang phát mã...", "4/6 Xác thực OK")
-
-                        # BƯỚC 5: Hứng và Điền mã OTP
+                        # LOG 3: Chờ mã OTP
+                        masked_p = phone_num[:4] + "***" + phone_num[-3:] if len(phone_num) >= 7 else phone_num
                         if provided_phone:
                             await notify(
-                                f"📩 Shopee đã gửi mã OTP về số {phone_num}!\n"
-                                f"👉 Soạn: OTP <mã> trong 90s để hoàn tất.",
-                                "5/6 Chờ nhập OTP",
+                                f"📩 {prefix}[3/4] Shopee đã gửi mã OTP về số {phone_num}!\n"
+                                f"👉 Soạn: OTP <mã> trong 90s để hoàn tất.\n"
+                                f"⚠️ Lưu ý: Đang ở bước tạo acc, lệnh STOP sẽ không hoàn phí dịch vụ.",
+                                "3/4 Chờ OTP",
                                 send_to_user=True
                             )
                             from app.services.task_manager import request_user_otp, wait_for_user_otp
@@ -376,20 +377,23 @@ class ShopeeRegService:
                                 self._update_db_log(record_id, status="failed", step_failed="otp", error_msg="Quá thời gian chờ nhập OTP (90s)", logs=timeline_logs)
                                 return {"ok": False, "step": "otp", "error": "❌ Quá thời gian chờ nhập mã OTP từ bạn (90 giây).", "should_refund": True}
                         else:
-                            # Luồng tự động: Lắng nghe mã OTP 150s (Ẩn số và OTP thô trên Zalo)
-                            await notify("📩 [Giai đoạn 5/6] Đang lắng nghe mã xác thực từ hệ thống (tối đa 150s)...", "5/6 Chờ OTP")
+                            await notify(
+                                f"📩 {prefix}[3/4] Đã nhận số {masked_p}, đang chờ mã xác thực OTP từ tổng đài...\n"
+                                f"⚠️ Lưu ý: Đã thuê số thành công. Nếu soạn STOP sẽ không hoàn tiền nick này.",
+                                "3/4 Chờ OTP"
+                            )
                             ok_otp, otp_code, otp_msg = self.viotp.poll_otp(req_id, timeout_seconds=150, interval=4)
 
                             if not ok_otp or not otp_code:
                                 log_step(f"Đầu số {phone_num} không nhận được OTP: {otp_msg}")
                                 await browser.close()
                                 if phone_try < max_phone_tries:
-                                    # Tiếp tục vòng lặp sang số tiếp theo
                                     continue
                                 self._update_db_log(record_id, status="failed", step_failed="otp", error_msg=otp_msg, logs=timeline_logs)
                                 return {"ok": False, "step": "otp", "error": f"❌ Hệ thống đã thử {max_phone_tries} đầu số liên tiếp nhưng chưa nhận được mã xác thực OTP từ tổng đài.", "should_refund": True}
 
-                            await notify("✅ [Giai đoạn 5/6] Đã nhận mã xác thực an toàn! Đang hoàn tất tài khoản...", "5/6 Điền OTP")
+                        # LOG 4: Nhập OTP & Hoàn tất tài khoản
+                        await notify(f"🔑 {prefix}[4/4] Đã nhận OTP! Đang thiết lập mật khẩu & hoàn tất tài khoản...", "4/4 Hoàn tất")
 
                         # Điền OTP vào 6 ô input
                         try:
@@ -455,7 +459,6 @@ class ShopeeRegService:
 
                             if is_registered_screen:
                                 is_reclaimed = 1
-                                await notify("🔄 [Giai đoạn 6/6] Phát hiện số đã có tài khoản cũ! Đang bấm 'Reclaim Phone Number' để chiếm lại và cấp mới...", "6/6 Reclaim SĐT")
                                 logger.info("🔄 Phát hiện màn hình đã đăng ký! Tiến hành click 'Reclaim Phone Number'...")
 
                                 # Thử click selector
@@ -507,7 +510,7 @@ class ShopeeRegService:
                             # 2. Kiểm tra nếu là số sạch (đã vào thẳng màn hình Set your password / Thiết lập mật khẩu)
                             pwd_check = page.locator("input[type='password'], input[placeholder*='Password'], input[placeholder*='password'], input[placeholder*='Mật khẩu'], input[name='newPassword']").first
                             if await pwd_check.count() > 0 and await pwd_check.is_visible():
-                                await notify("✨ [Giai đoạn 6/6] Số sạch hợp lệ! Đang thiết lập mật khẩu mới...", "6/6 Tạo pass mới")
+                                logger.info("✨ Số sạch hợp lệ! Đang chuyển thẳng sang thiết lập mật khẩu mới...")
                                 found_target_stage = True
                                 break
 
@@ -523,7 +526,6 @@ class ShopeeRegService:
                             logger.warning("Không thấy ô nhập password sau 15s, kiểm tra lại DOM...")
 
                         # Đặt Mật Khẩu ngẫu nhiên thỏa mãn chính sách bảo mật của Shopee
-                        await notify(f"🔑 [Giai đoạn 6/6] Đang thiết lập mật khẩu an toàn: {target_password}", "6/6 Nhập mật khẩu")
                         logger.info("🔑 Đang nhập mật khẩu tài khoản mới: %s", target_password)
 
                         try:
@@ -569,7 +571,7 @@ class ShopeeRegService:
                         await asyncio.sleep(4.5)
 
                         # Thu hoạch Cookies
-                        await notify("🍪 [Giai đoạn 6/6] Đăng ký hoàn tất! Đang lưu thông tin phiên làm việc...", "6/6 Lưu Cookie")
+                        logger.info("🍪 Đăng ký hoàn tất! Đang lưu thông tin phiên làm việc...")
                         cookies = await context.cookies()
                         cookie_dict = {c["name"]: c["value"] for c in cookies}
                         spc_st = cookie_dict.get("SPC_ST", "")

@@ -23,6 +23,7 @@ from .task_manager import (
     request_stop_user_task,
     finish_user_task,
     is_stop_requested,
+    is_task_phone_rented,
     is_waiting_for_otp,
     submit_user_otp,
 )
@@ -219,13 +220,22 @@ def handle_zalo_user_message(
         busy, task_info = is_user_busy(user_task_key)
         if busy:
             request_stop_user_task(user_task_key)
+            is_rented, r_phone = is_task_phone_rented(user_task_key)
+            phone_notice = ""
+            if is_rented:
+                p_text = f" (SĐT: {r_phone})" if r_phone else ""
+                phone_notice = (
+                    f"⚠️ LƯU Ý: Tiến trình ĐÃ THUÊ SỐ ĐIỆN THOẠI{p_text} từ tổng đài và đang trong giai đoạn tạo tài khoản.\n"
+                    f"Khoản chi phí thuê số của nick này đã được trừ và không thể hoàn lại!\n\n"
+                )
             send_zalo_message(
                 zalo_user_id,
                 f"🛑 ［ĐÃ PHÁT LỆNH DỪNG TIẾN TRÌNH］\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📌 Nhiệm vụ đang hủy: {task_info.get('task_name', 'Đang xử lý')}\n"
+                f"📌 Nhiệm vụ: {task_info.get('task_name', 'Đang xử lý')}\n"
                 f"📍 Bước hiện tại: {task_info.get('current_step', 'Chờ phản hồi')}\n\n"
-                f"⏳ Bot đang an toàn đóng các trình duyệt Playwright và hủy các tác vụ ngầm.\n"
+                f"{phone_notice}"
+                f"⏳ Bot đang an toàn đóng trình duyệt và dừng tác vụ.\n"
                 f"👉 Sau vài giây bạn có thể thực hiện thao tác mới bình thường! ✨"
             )
         else:
@@ -731,9 +741,10 @@ def handle_zalo_user_message(
 
         send_zalo_message(
             zalo_user_id,
-            f"🚀 Đang đăng ký {total_to_reg} tài khoản Shopee...\n"
-            f"💰 Đã trừ: {actual_total_cost:,.0f}đ (Ví còn: {float(user.balance):,.0f}đ)\n"
-            f"⏳ Hệ thống đang tự động xử lý. Soạn 'STOP' để hủy."
+            f"🚀 [1/4] Đang khởi động đăng ký {total_to_reg} tài khoản Shopee...\n"
+            f"💰 Đã trừ ví: {actual_total_cost:,.0f}đ (Số dư: {float(user.balance):,.0f}đ)\n"
+            f"ℹ️ Bot sẽ tự động thông báo khi tạo xong acc và hoàn tiền 100% nếu không thành công!\n"
+            f"👉 Soạn 'STOP' nếu muốn hủy tiến trình."
         )
 
         try:
@@ -814,8 +825,12 @@ def handle_zalo_user_message(
 
                     # Kiểm tra nếu bị dừng trong khi chạy
                     if res.get("step") == "stopped" or is_stop_requested(user_task_key):
-                        new_bal = refund_single_acc(fee_per_acc)
-                        notify_sync(f"🛑 {acc_tag} Đã dừng tiến trình. Đã hoàn {fee_per_acc:,.0f}đ vào ví (Số dư: {new_bal:,.0f}đ).")
+                        is_rented, r_phone = is_task_phone_rented(user_task_key)
+                        if is_rented and not custom_phone:
+                            notify_sync(f"🛑 {acc_tag} Đã dừng tiến trình. Tài khoản này đã thuê số thành công ({r_phone}) nên không hoàn phí.")
+                        else:
+                            new_bal = refund_single_acc(fee_per_acc)
+                            notify_sync(f"🛑 {acc_tag} Đã dừng tiến trình. Đã hoàn {fee_per_acc:,.0f}đ vào ví (Số dư: {new_bal:,.0f}đ).")
                         break
 
                     if res.get("ok"):
