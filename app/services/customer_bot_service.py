@@ -340,11 +340,16 @@ def handle_zalo_user_message(
 
         deposit_amount = 50000
         if len(parts) >= 2:
-            amt_candidate = re.sub(r"\D", "", parts[1])
-            if amt_candidate and int(amt_candidate) >= 10000:
-                deposit_amount = int(amt_candidate)
+            raw_amt = parts[1].strip().lower()
+            amt_digits = re.sub(r"\D", "", raw_amt)
+            if amt_digits:
+                val = int(amt_digits)
+                if "k" in raw_amt or (0 < val < 1000):
+                    val = val * 1000
+                if val >= 1000:
+                    deposit_amount = val
 
-        order_code = generate_unique_order_code()
+        order_code = generate_unique_order_code(db)
         dep_order = Order(
             order_code=order_code,
             user_id=user.id,
