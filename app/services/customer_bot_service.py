@@ -106,14 +106,18 @@ def format_price_tag(amount: Union[Decimal, float, int]) -> str:
 
 
 def render_product_menu_text(db: Session, target_name: str = "") -> str:
-    """Tạo bảng menu sản phẩm gọn, rõ, phù hợp hiển thị Zalo."""
+    """Tạo bảng menu sản phẩm phong cách trực quan, bắt mắt."""
     products = db.query(Product).filter(Product.status == "active").order_by(Product.id.asc()).all()
-    greeting = f"👋 {target_name}! " if target_name else ""
+    greeting = f"👋 Hé lô {target_name}! Chúc bạn săn deal vui vẻ 🚀\n" if target_name else ""
 
-    lines = [f"✨ {greeting}BẢNG GIÁ DỊCH VỤ 24/7:"]
+    lines = [
+        "✨ 𝐇Ệ 𝐓𝐇Ố𝐍𝐆 𝐓Ự ĐỘ𝐍𝐆 𝟐𝟒/𝟕 ✨",
+        greeting,
+        "🛒 𝐁Ả𝐍𝐆 𝐆𝐈Á 𝐃Ị𝐂𝐇 𝐕Ụ 𝐒Ẵ𝐍 𝐇À𝐍𝐆:",
+    ]
 
     if not products:
-        lines.append("• Kho đang cập nhật thêm dịch vụ mới...")
+        lines.append("• Hiện kho đang cập nhật thêm dịch vụ mới...")
     else:
         ICONS = {1: "💎", 2: "🎬", 3: "🤖", 4: "🎨", 5: "📚", 6: "📱", 7: "☕"}
         for p in products:
@@ -122,32 +126,36 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
                 continue
 
             if p.id in [3, 5] or "drive" in p_name_lower:
-                stock_tag = "🟢 Sẵn hàng"
+                stock_tag = "🟢 Sẵn hàng 24/7"
             elif p.id == 6 or "thuê sim" in p_name_lower or "otp" in p_name_lower:
-                stock_tag = "🟢 Cấp số tự động"
+                stock_tag = "🟢 Sẵn sàng (Cấp số tự động 24/7)"
             elif p.id == 7 or "highlands" in p_name_lower:
-                stock_tag = "🟢 Cấp OTP tự động"
+                stock_tag = "🟢 Sẵn sàng (Cấp OTP tự động)"
             else:
                 stock = db.query(ProductStock).filter(
                     ProductStock.product_id == p.id,
                     ProductStock.status == "available"
                 ).count()
-                stock_tag = f"🟢 Còn {stock} acc" if stock > 0 else "🔴 Tạm hết"
+                stock_tag = f"🟢 Sẵn {stock} acc" if stock > 0 else "🔴 Tạm hết"
 
             price_tag = format_price_tag(p.price)
             ico = ICONS.get(p.id, "📦")
-            lines.append(f"{ico} [{p.id}] {p.product_name} — {price_tag} | {stock_tag}")
+            lines.append(f"{ico} [{p.id}] {p.product_name} ➔ {price_tag}")
+            lines.append(f"    └ {stock_tag}\n")
 
     lines.extend([
-        "",
-        "⚡ CÁCH MUA:",
-        "• Nhắn số mã để mua 1 (vd: 1)",
-        "• BUY <mã> <sl> mua nhiều (vd: BUY 1 2)",
-        "• SODU — số dư | DONHANG — nick đã mua",
-        "• CHECKSDT <số> — check F02 | OTP — lấy mã",
-        "• CO <mã> — tra vận đơn SPX | HELP — trợ giúp",
+        "⚡ 𝐋Ố𝐈 𝐓Ắ𝐂 𝐌𝐔𝐀 𝐒𝐈Ê𝐔 𝐓Ố𝐂:",
+        "👉 Nạp tiền vào ví: Nhắn NAP (Tối thiểu 10k)",
+        "👉 Mua 1 cái: Nhắn số [Mã] (Ví dụ: 1 hoặc 6)",
+        "👉 Mua nhiều: BUY <Mã> <SL> (Ví dụ: BUY 1 2)",
+        "👉 Check SĐT Shopee: CHECKSDT <SĐT> (hoặc gửi SĐT)",
+        "👉 Lấy mã OTP: Nhắn OTP",
+        "👉 Xem số dư ví: Nhắn SODU",
+        "👉 Lấy nick đã mua: Nhắn DONHANG",
+        "👉 Tra cứu SPX: CO <Mã vận đơn>",
+        "👉 Hướng dẫn từ A-Z: Nhắn HELP",
     ])
-    return "\n".join(lines).strip()
+    return "\n".join([line for line in lines if line is not None]).strip()
 
 
 def handle_zalo_user_message(
