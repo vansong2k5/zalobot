@@ -66,7 +66,7 @@ def request_phone_number(service_id: int = None, network: str = None) -> Dict[st
         logger.error("Chưa cấu hình VIOTP_TOKEN trong hệ thống.")
         return {"ok": False, "error": "Hệ thống thuê số tạm thời đang nâng cấp. Vui lòng thử lại sau!"}
 
-    target_service = service_id or VIOTP_SERVICE_ID or 4
+    target_service = service_id or VIOTP_SERVICE_ID or 20
     url = f"{VIOTP_BASE_URL}/request/getv2"
     params = {
         "token": token,
@@ -99,6 +99,41 @@ def request_phone_number(service_id: int = None, network: str = None) -> Dict[st
     except Exception as ex:
         logger.error("Lỗi kết nối request_phone_number: %s", ex)
         return {"ok": False, "error": "Hệ thống cấp số tạm thời bận. Vui lòng thử lại sau ít phút!"}
+
+
+def request_shopee_phone_pool(services: list = None, network: str = None) -> Dict[str, Any]:
+    """
+    Thuê số điện thoại phục vụ đăng ký Shopee qua pool dịch vụ dự phòng:
+    - Danh sách dịch vụ: Grab (20), Facebook (7), AWS Amazon (527), Shopee (4)
+    - Tự động xáo trộn và thử lần lượt. Nếu dịch vụ này hết số -> tự động nhảy sang dịch vụ còn lại.
+    - Hỗ trợ chọn nhà mạng (VIETTEL, VIETNAMOBILE, VINAPHONE, MOBIFONE, ITELECOM, WINTEL hoặc ALL).
+    - Bảo mật tuyệt đối: Không để lộ tên dịch vụ bên thứ ba ra ngoài.
+    """
+    import random
+    if not services:
+        # Chỉ dùng các dịch vụ 3k: Grab (20), Facebook (7), AWS Amazon (527)
+        service_pool = [20, 7, 527]
+        random.shuffle(service_pool)
+    else:
+        # Loại bỏ ID 4 nếu có trong danh sách
+        service_pool = [s for s in services if s != 4]
+        random.shuffle(service_pool)
+
+    net_param = None if (not network or network.upper() in ("ALL", "TẤT CẢ", "AUTO")) else network.upper()
+
+    for s_id in service_pool:
+        res = request_phone_number(service_id=s_id, network=net_param)
+        if res.get("ok"):
+            logger.info(f"Đã cấp số thành công qua service ID {s_id} (Phone: {res.get('phone')})")
+            res["service_id"] = s_id
+            return res
+        else:
+            logger.warning(f"Service ID {s_id} tạm thời chưa có số: {res.get('error')}. Đang chuyển dịch vụ khác trong pool...")
+
+    return {
+        "ok": False,
+        "error": "Hệ thống tổng đài tạm thời hết đầu số khả dụng. Vui lòng thử lại sau ít phút!"
+    }
 
 
 def request_highlands_phone() -> Dict[str, Any]:
@@ -321,6 +356,17 @@ class ViOTPService:
             return True, phone, req_id, f"Cấp số thành công: {phone}"
         return False, None, None, res.get("error", "Không thể lấy số điện thoại lúc này.")
 
+    def request_shopee_phone(self, services: Optional[list] = None, network: str = "") -> Tuple[bool, Optional[str], Optional[int], str]:
+        """
+        Cấp số điện thoại Shopee qua pool dịch vụ (Grab, Facebook, AWS, Shopee) dự phòng tự động.
+        """
+        res = request_shopee_phone_pool(services=services, network=network)
+        if res.get("ok"):
+            phone = res.get("phone") or res.get("phone_number")
+            req_id = res.get("request_id")
+            return True, phone, req_id, "Cấp số thành công"
+        return False, None, None, res.get("error", "Hệ thống tổng đài tạm hết đầu số. Vui lòng thử lại sau!")
+
     def poll_otp(self, request_id: int, timeout_seconds: int = 60, interval: int = 3) -> Tuple[bool, Optional[str], str]:
         """
         Lặp kiểm tra mã OTP trả về cho request_id.
@@ -328,6 +374,7 @@ class ViOTPService:
         if not self.token:
             return False, None, "Chưa cấu hình mã kết nối hệ thống."
 
+        import re
         url = f"{VIOTP_BASE_URL}/session/getv2?token={self.token}&requestId={request_id}"
         start_time = time.time()
 
@@ -342,8 +389,17 @@ class ViOTPService:
 
                     if req_status == 1:
                         otp_code = data.get("Code")
-                        sms_content = data.get("SmsContent", "")
-                        return True, str(otp_code), f"Nhận mã OTP thành công: {otp_code}"
+                        sms_content = str(data.get("SmsContent") or "")
+                        if not otp_code and sms_content:
+                            # Tìm 6 chữ số liên tiếp trong tin nhắn SMS
+                            m = re.search(r'\b(\d{6})\b', sms_content)
+                            if not m:
+                                m = re.search(r'\b(\d{4,6})\b', sms_content)
+                            if m:
+                                otp_code = m.group(1)
+                        if otp_code:
+                            otp_str = str(otp_code).strip()
+                            return True, otp_str, f"Nhận mã OTP thành công: {otp_str}"
                     elif req_status == 2:
                         return False, None, "Yêu cầu cấp mã đã hết hạn."
 

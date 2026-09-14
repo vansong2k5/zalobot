@@ -2,6 +2,8 @@
 Dịch vụ tương tác với Zalo Bot API (https://bot-api.zaloplatforms.com).
 """
 
+import time
+import threading
 import httpx
 from app.config import ZALO_BOT_TOKEN
 
@@ -121,6 +123,47 @@ def send_chat_action(user_zalo_id: str, action: str = "typing") -> bool:
     except Exception as e:
         print(f"Lỗi gửi ChatAction: {e}")
         return False
+
+
+class ZaloTypingKeeper:
+    """
+    Duy trì trạng thái 'typing' (đang soạn tin...) liên tục mỗi 3.5s 
+    trong suốt thời gian các tác vụ nặng (như check SĐT Shopee, Reg acc...) đang xử lý,
+    đảm bảo người dùng Zalo luôn thấy bot đang phản hồi và không bị ngắt quãng.
+    """
+    def __init__(self, user_zalo_id: str, interval: float = 3.5):
+        self.user_zalo_id = str(user_zalo_id)
+        self.interval = interval
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+
+    def start(self):
+        send_chat_action(self.user_zalo_id, "typing")
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            time.sleep(self.interval)
+            if self._stop_event.is_set():
+                break
+            try:
+                send_chat_action(self.user_zalo_id, "typing")
+            except Exception:
+                pass
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
 
 
 def send_zalo_photo(user_zalo_id: str, photo_url: str, caption: str = "") -> bool:

@@ -66,5 +66,8 @@ PROXY_LIST = [
 
 # --- 8. ViOTP API (Thuê SIM nhận mã OTP) ---
 VIOTP_TOKEN = os.getenv("VIOTP_TOKEN", "").strip()
-# Mặc định Service ID 4 = Shopee / ShopeePay (5k) chuẩn nhận OTP Shopee
-VIOTP_SERVICE_ID = int(os.getenv("VIOTP_SERVICE_ID", "4"))
+# Mặc định Service ID 20 = Grab (3k) dùng nhận OTP Shopee ổn định, tiết kiệm chi phí
+VIOTP_SERVICE_ID = int(os.getenv("VIOTP_SERVICE_ID", "20"))
+
+# --- 9. SadCaptcha API (Giải AI Captcha Shopee) ---
+SADCAPTCHA_API_KEY = os.getenv("SADCAPTCHA_API_KEY", "148441524bab08559d5bb196cb9f6324").strip()
