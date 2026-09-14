@@ -434,45 +434,139 @@ class ShopeeRegService:
                             await btn_verify.click()
                             await asyncio.sleep(2.5)
 
-                        # BƯỚC 6: Xử lý reclaim hoặc đặt mật khẩu
+                        # BƯỚC 6: Xử lý Reclaim Phone Number (nếu số đã đăng ký) hoặc đặt mật khẩu (nếu số sạch)
                         is_reclaimed = 0
                         found_target_stage = False
-                        for _ in range(12):
+
+                        for check_step in range(16):
                             if zalo_user_id and is_stop_requested(zalo_user_id):
                                 await browser.close()
-                                return {"ok": False, "step": "stopped", "error": "Đã dừng tiến trình theo yêu cầu của bạn (Lệnh STOP)."}
+                                return {"ok": False, "step": "stopped", "error": "Đã dừng tiến trình theo yêu cầu của bạn (Lệnh STOP).", "should_refund": True}
 
-                            reclaim_link = page.locator("a:has-text('Reclaim Phone Number'), button:has-text('Reclaim Phone Number'), :text('Reclaim Phone Number'), :text('tiếp tục đăng ký')").first
-                            if await reclaim_link.count() > 0 and await reclaim_link.is_visible():
+                            # 1. Kiểm tra màn hình "Number already registered" / "Số điện thoại đã được đăng ký"
+                            body_txt = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                            is_registered_screen = (
+                                "Number already registered" in body_txt or 
+                                "already registered" in body_txt or 
+                                "Số điện thoại đã được đăng ký" in body_txt or 
+                                "Reclaim Phone Number" in body_txt or
+                                "Lấy lại số điện thoại" in body_txt
+                            )
+
+                            if is_registered_screen:
                                 is_reclaimed = 1
-                                await notify("🔄 [Giai đoạn 6/6] Đang làm sạch và cấp mới tài khoản cho số điện thoại...", "6/6 Làm sạch tài khoản")
-                                await reclaim_link.click()
+                                await notify("🔄 [Giai đoạn 6/6] Phát hiện số đã có tài khoản cũ! Đang bấm 'Reclaim Phone Number' để chiếm lại và cấp mới...", "6/6 Reclaim SĐT")
+                                logger.info("🔄 Phát hiện màn hình đã đăng ký! Tiến hành click 'Reclaim Phone Number'...")
+
+                                # Thử click selector
+                                clicked_reclaim = False
+                                for rec_sel in [
+                                    "a:has-text('Reclaim Phone Number')",
+                                    "button:has-text('Reclaim Phone Number')",
+                                    "div:has-text('Reclaim Phone Number')",
+                                    ":text('Reclaim Phone Number')",
+                                    "a:has-text('Lấy lại số điện thoại')",
+                                    "button:has-text('Lấy lại số điện thoại')",
+                                    ":text('Lấy lại số điện thoại')",
+                                    ":text('tiếp tục đăng ký')"
+                                ]:
+                                    rec_loc = page.locator(rec_sel).last
+                                    if await rec_loc.count() > 0 and await rec_loc.is_visible():
+                                        try:
+                                            b_box = await rec_loc.bounding_box()
+                                            if b_box:
+                                                await page.mouse.click(b_box["x"] + b_box["width"] / 2, b_box["y"] + b_box["height"] / 2)
+                                            else:
+                                                await rec_loc.click()
+                                            clicked_reclaim = True
+                                            logger.info("✅ Đã click Reclaim qua selector: %s", rec_sel)
+                                            break
+                                        except Exception:
+                                            pass
+
+                                if not clicked_reclaim:
+                                    # Fallback click qua DOM
+                                    clicked_reclaim = await page.evaluate('''() => {
+                                        let all = Array.from(document.querySelectorAll('a, button, div, span'));
+                                        for (let el of all) {
+                                            let t = (el.innerText || '').trim().toLowerCase();
+                                            if (t === 'reclaim phone number' || t === 'lấy lại số điện thoại' || t.includes('reclaim phone') || t.includes('tiếp tục đăng ký')) {
+                                                el.click();
+                                                return true;
+                                            }
+                                        }
+                                        return false;
+                                    }''')
+                                    if clicked_reclaim:
+                                        logger.info("✅ Đã click Reclaim qua DOM evaluate!")
+
                                 await asyncio.sleep(3)
                                 found_target_stage = True
                                 break
 
-                            pwd_input_check = page.locator("input[type='password'], input[name='newPassword'], input[placeholder*='Mật khẩu']").first
-                            if await pwd_input_check.count() > 0 and await pwd_input_check.is_visible():
-                                await notify("✨ [Giai đoạn 6/6] Đầu số hợp lệ! Đang chuyển sang thiết lập tài khoản...", "6/6 Tạo pass mới")
+                            # 2. Kiểm tra nếu là số sạch (đã vào thẳng màn hình Set your password / Thiết lập mật khẩu)
+                            pwd_check = page.locator("input[type='password'], input[placeholder*='Password'], input[placeholder*='password'], input[placeholder*='Mật khẩu'], input[name='newPassword']").first
+                            if await pwd_check.count() > 0 and await pwd_check.is_visible():
+                                await notify("✨ [Giai đoạn 6/6] Số sạch hợp lệ! Đang thiết lập mật khẩu mới...", "6/6 Tạo pass mới")
                                 found_target_stage = True
                                 break
 
                             await asyncio.sleep(1)
 
-                        # Đặt Mật Khẩu
-                        await notify("🔑 [Giai đoạn 6/6] Đang thiết lập mật khẩu bảo mật cho tài khoản...", "6/6 Nhập mật khẩu")
-                        pwd_input = page.locator("input[type='password'], input[name='newPassword'], input[placeholder*='Mật khẩu']").first
-                        await pwd_input.wait_for(timeout=15000)
-                        await pwd_input.click()
+                        # Chờ màn hình Set your password xuất hiện (tối đa 15s)
+                        pwd_input = page.locator(
+                            "input[type='password'], input[placeholder*='Password'], input[placeholder*='password'], input[placeholder*='Mật khẩu'], input[name='newPassword']"
+                        ).first
+                        try:
+                            await pwd_input.wait_for(state="visible", timeout=15000)
+                        except Exception:
+                            logger.warning("Không thấy ô nhập password sau 15s, kiểm tra lại DOM...")
 
-                        for ch in target_password:
-                            await pwd_input.type(ch, delay=random.randint(40, 90))
+                        # Đặt Mật Khẩu ngẫu nhiên thỏa mãn chính sách bảo mật của Shopee
+                        await notify(f"🔑 [Giai đoạn 6/6] Đang thiết lập mật khẩu an toàn: {target_password}", "6/6 Nhập mật khẩu")
+                        logger.info("🔑 Đang nhập mật khẩu tài khoản mới: %s", target_password)
 
-                        await asyncio.sleep(1)
+                        try:
+                            await pwd_input.click()
+                            await pwd_input.fill("")
+                            for ch in target_password:
+                                await pwd_input.type(ch, delay=random.randint(40, 80))
+                                await asyncio.sleep(random.uniform(0.02, 0.04))
+                        except Exception as ex_pwd:
+                            logger.warning("Lỗi type password: %s, dùng fallback evaluate", ex_pwd)
+                            await page.evaluate('''(val) => {
+                                let inp = document.querySelector("input[type='password'], input[placeholder*='Password'], input[placeholder*='Mật khẩu']");
+                                if (inp) {
+                                    inp.value = val;
+                                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                }
+                            }''', target_password)
 
-                        btn_signup = page.locator("button:has-text('SIGN UP'), button:has-text('ĐĂNG KÝ'), button:has-text('Đăng ký')").first
-                        await btn_signup.click()
-                        await asyncio.sleep(4)
+                        await asyncio.sleep(1.5)
+
+                        # Bấm nút SIGN UP / ĐĂNG KÝ
+                        btn_signup = page.locator(
+                            "button:has-text('SIGN UP'), button:has-text('Sign Up'), button:has-text('ĐĂNG KÝ'), button:has-text('Đăng ký')"
+                        ).first
+                        try:
+                            if await btn_signup.count() > 0 and await btn_signup.is_visible():
+                                await btn_signup.click()
+                                logger.info("👉 Đã bấm nút SIGN UP / ĐĂNG KÝ!")
+                        except Exception:
+                            await page.evaluate('''() => {
+                                let btns = Array.from(document.querySelectorAll('button'));
+                                for (let b of btns) {
+                                    let t = (b.innerText || '').trim().toUpperCase();
+                                    if (t === 'SIGN UP' || t === 'ĐĂNG KÝ') {
+                                        b.click();
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }''')
+
+                        await asyncio.sleep(4.5)
 
                         # Thu hoạch Cookies
                         await notify("🍪 [Giai đoạn 6/6] Đăng ký hoàn tất! Đang lưu thông tin phiên làm việc...", "6/6 Lưu Cookie")

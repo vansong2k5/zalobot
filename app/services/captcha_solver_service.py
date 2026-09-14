@@ -920,61 +920,100 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
             await asyncio.sleep(2.0)
             continue
 
-        # 4A. Kiểm tra Modal Popup Zalo: "Chúng tôi sẽ gửi mã xác minh qua Zalo đến (+84) xxx"
-        zalo_popup_btn = page.locator("button:has-text('Các phương pháp khác'), button:has-text('phương pháp khác')").first
-        if await zalo_popup_btn.count() > 0 and await zalo_popup_btn.is_visible():
-            logger.info("⚙️ Phát hiện Popup Zalo! Đang bấm nút 'Các phương pháp khác'...")
+        # 4A. Kiểm tra Modal Popup Zalo: "Chúng tôi sẽ gửi mã xác minh qua Zalo" / "We will send a verification code via Zalo"
+        zalo_popup_btn = page.locator(
+            "button:has-text('Các phương pháp khác'), button:has-text('phương pháp khác'), button:has-text('Other Methods'), button:has-text('Other methods'), :text('Other Methods'), :text('Các phương pháp khác')"
+        ).first
+        has_zalo_modal = False
+        try:
+            if await zalo_popup_btn.count() > 0 and await zalo_popup_btn.is_visible():
+                has_zalo_modal = True
+            else:
+                has_zalo_modal = await page.evaluate('''() => {
+                    let t = (document.body ? document.body.innerText : '') || '';
+                    return t.includes('verification code via Zalo') || t.includes('gửi mã xác minh qua Zalo') || t.includes('Send to Zalo');
+                }''')
+        except Exception:
+            pass
+
+        if has_zalo_modal:
+            logger.info("⚙️ Phát hiện Popup Zalo! Bắt buộc bấm 'Các phương pháp khác' / 'Other Methods' để chuyển sang Gọi điện/SMS...")
             if notify_callback:
                 try:
-                    await notify_callback("⚙️ Phát hiện yêu cầu gửi Zalo, đang tự động chuyển sang nhận qua Tin nhắn SMS...")
+                    await notify_callback("⚙️ Phát hiện yêu cầu gửi Zalo, đang tự động chuyển sang nhận mã qua Cuộc gọi thoại...")
                 except Exception:
                     pass
 
+            clicked_other = False
             try:
-                b_box = await zalo_popup_btn.bounding_box()
-                if b_box:
-                    await page.mouse.click(b_box["x"] + b_box["width"] / 2, b_box["y"] + b_box["height"] / 2)
-                else:
-                    await zalo_popup_btn.click()
+                if await zalo_popup_btn.count() > 0 and await zalo_popup_btn.is_visible():
+                    b_box = await zalo_popup_btn.bounding_box()
+                    if b_box:
+                        await page.mouse.click(b_box["x"] + b_box["width"] / 2, b_box["y"] + b_box["height"] / 2)
+                    else:
+                        await zalo_popup_btn.click()
+                    clicked_other = True
             except Exception:
-                await zalo_popup_btn.click(force=True)
+                pass
 
-            await asyncio.sleep(1.8)
+            if not clicked_other:
+                try:
+                    clicked_other = await page.evaluate('''() => {
+                        let all = Array.from(document.querySelectorAll('button, div, a, span'));
+                        for (let el of all) {
+                            let t = (el.innerText || '').trim().toLowerCase();
+                            if (t === 'other methods' || t === 'các phương pháp khác' || t.includes('other methods') || t.includes('phương pháp khác')) {
+                                el.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }''')
+                except Exception:
+                    pass
+
+            await asyncio.sleep(2.0)
             continue
 
-        # 4B. Kiểm tra Màn hình "Chọn Phương thức xác minh" (Thẻ Zalo / Tin nhắn SMS / Cuộc gọi thoại)
+        # 4B. Kiểm tra Màn hình "Chọn Phương thức xác minh" (Select Verification Method)
         is_select_method_screen = False
         try:
             is_select_method_screen = await page.evaluate('''() => {
                 let t = document.body ? (document.body.innerText || '') : '';
-                return t.includes('Chọn Phương thức xác minh') || t.includes('Chọn một trong các phương thức');
+                return t.includes('Chọn Phương thức xác minh') || 
+                       t.includes('Chọn một trong các phương thức') ||
+                       t.includes('Select Verification Method') ||
+                       t.includes('Choose a verification method');
             }''')
         except Exception:
             pass
 
         if is_select_method_screen:
-            logger.info("👉 Phát hiện màn hình 'Chọn Phương thức xác minh'! Đang chọn theo thứ tự ưu tiên (SMS -> Cuộc gọi thoại -> Zalo)...")
+            logger.info("👉 Phát hiện màn hình 'Chọn Phương thức xác minh'! Ưu tiên 100% Cuộc gọi thoại -> sau đó Tin nhắn SMS (Loại bỏ Zalo)...")
             selected_method = None
 
-            # ƯU TIÊN 1: Tin nhắn SMS
+            # ƯU TIÊN 1 (100%): Cuộc gọi thoại (Voice Call / Gọi qua số điện thoại / Gọi cho tôi)
             try:
-                sms_card = page.locator("text='Tin nhắn SMS'").last
-                if await sms_card.count() > 0 and await sms_card.is_visible():
-                    c_box = await sms_card.bounding_box()
+                call_card = page.locator(
+                    "text='Cuộc gọi thoại', text='Gọi cho tôi', text='Gọi qua số điện thoại', text='Voice Call', text='Voice call', text='Phone Call', text='Phone call', text='Call me'"
+                ).last
+                if await call_card.count() > 0 and await call_card.is_visible():
+                    c_box = await call_card.bounding_box()
                     if c_box:
                         await page.mouse.click(c_box["x"] + c_box["width"] / 2, c_box["y"] + c_box["height"] / 2)
-                        selected_method = "SMS"
-                        logger.info("✅ [Ưu tiên 1] Đã click chọn thẻ 'Tin nhắn SMS'!")
+                    else:
+                        await call_card.click()
+                    selected_method = "VoiceCall"
+                    logger.info("📞 [Ưu tiên 1 - 100%] Đã chọn phương thức: Cuộc gọi thoại (Voice Call)!")
             except Exception:
                 pass
 
             if not selected_method:
-                # Fallback tìm text 'Tin nhắn SMS' trong DOM
-                found_sms = await page.evaluate('''() => {
-                    let all = Array.from(document.querySelectorAll('div, span, p'));
+                found_call = await page.evaluate('''() => {
+                    let all = Array.from(document.querySelectorAll('div, span, p, button, a'));
                     for (let el of all) {
-                        let t = (el.innerText || '').trim();
-                        if (t === 'Tin nhắn SMS' || t === 'Gửi qua SMS') {
+                        let t = (el.innerText || '').trim().toLowerCase();
+                        if (t.includes('cuộc gọi thoại') || t.includes('gọi cho tôi') || t.includes('voice call') || t.includes('phone call')) {
                             el.click();
                             if (el.parentElement) el.parentElement.click();
                             return true;
@@ -982,29 +1021,33 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
                     }
                     return false;
                 }''')
-                if found_sms:
-                    selected_method = "SMS"
-                    logger.info("✅ [Ưu tiên 1] Đã kích hoạt 'Tin nhắn SMS' qua DOM click!")
+                if found_call:
+                    selected_method = "VoiceCall"
+                    logger.info("📞 [Ưu tiên 1 - 100%] Đã kích hoạt 'Cuộc gọi thoại' qua DOM click!")
 
-            # ƯU TIÊN 2: Cuộc gọi thoại (Gọi qua số) nếu không có SMS
+            # ƯU TIÊN 2: Tin nhắn SMS (nếu không có phương thức gọi thoại)
             if not selected_method:
                 try:
-                    call_card = page.locator("text='Cuộc gọi thoại', text='Gọi cho tôi', text='Gọi qua số điện thoại'").last
-                    if await call_card.count() > 0 and await call_card.is_visible():
-                        c_box = await call_card.bounding_box()
+                    sms_card = page.locator(
+                        "text='Tin nhắn SMS', text='Gửi qua SMS', text='SMS Text Message', text='Text Message', text='SMS'"
+                    ).last
+                    if await sms_card.count() > 0 and await sms_card.is_visible():
+                        c_box = await sms_card.bounding_box()
                         if c_box:
                             await page.mouse.click(c_box["x"] + c_box["width"] / 2, c_box["y"] + c_box["height"] / 2)
-                            selected_method = "VoiceCall"
-                            logger.info("📞 [Ưu tiên 2] Không có SMS, đã chọn thẻ 'Cuộc gọi thoại'!")
+                        else:
+                            await sms_card.click()
+                        selected_method = "SMS"
+                        logger.info("✅ [Ưu tiên 2] Không có gọi thoại, đã chọn thẻ 'Tin nhắn SMS'!")
                 except Exception:
                     pass
 
                 if not selected_method:
-                    found_call = await page.evaluate('''() => {
-                        let all = Array.from(document.querySelectorAll('div, span, p'));
+                    found_sms = await page.evaluate('''() => {
+                        let all = Array.from(document.querySelectorAll('div, span, p, button, a'));
                         for (let el of all) {
-                            let t = (el.innerText || '').trim();
-                            if (t.includes('Cuộc gọi thoại') || t.includes('Gọi cho tôi')) {
+                            let t = (el.innerText || '').trim().toLowerCase();
+                            if (t === 'tin nhắn sms' || t === 'gửi qua sms' || t === 'sms' || t.includes('text message')) {
                                 el.click();
                                 if (el.parentElement) el.parentElement.click();
                                 return true;
@@ -1012,20 +1055,11 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
                         }
                         return false;
                     }''')
-                    if found_call:
-                        selected_method = "VoiceCall"
-                        logger.info("📞 [Ưu tiên 2] Đã kích hoạt 'Cuộc gọi thoại' qua DOM click!")
+                    if found_sms:
+                        selected_method = "SMS"
+                        logger.info("✅ [Ưu tiên 2] Đã kích hoạt 'Tin nhắn SMS' qua DOM click!")
 
-            # ƯU TIÊN 3: Zalo nếu không có cả SMS lẫn Cuộc gọi
-            if not selected_method:
-                try:
-                    zalo_card = page.locator("text='Zalo', text='Gửi qua Zalo'").last
-                    if await zalo_card.count() > 0 and await zalo_card.is_visible():
-                        await zalo_card.click()
-                        selected_method = "Zalo"
-                        logger.info("💬 [Ưu tiên 3] Đã chọn thẻ 'Zalo'!")
-                except Exception:
-                    pass
+            # TUYỆT ĐỐI KHÔNG CHỌN ZALO THEO YÊU CẦU CỦA SONG
 
             if notify_callback and selected_method:
                 try:
@@ -1036,7 +1070,9 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
             await asyncio.sleep(1.5)
             # Nếu có nút 'Tiếp theo' hoặc 'Xác nhận' trong modal sau khi chọn thẻ
             try:
-                confirm_btn = page.locator("button:has-text('Tiếp theo'), button:has-text('TIẾP THEO'), button:has-text('Tiếp tục'), button:has-text('TIẾP TỤC'), button:has-text('Xác nhận'), button:has-text('XÁC NHẬN'), button:has-text('Gửi mã'), button:has-text('GỬI MÃ'), button.wyhvVD, button[class*='shopee-button-solid']").first
+                confirm_btn = page.locator(
+                    "button:has-text('Tiếp theo'), button:has-text('TIẾP THEO'), button:has-text('Tiếp tục'), button:has-text('TIẾP TỤC'), button:has-text('Xác nhận'), button:has-text('XÁC NHẬN'), button:has-text('Gửi mã'), button:has-text('GỬI MÃ'), button:has-text('Next'), button:has-text('NEXT'), button:has-text('Confirm'), button:has-text('CONFIRM'), button.wyhvVD, button[class*='shopee-button-solid']"
+                ).first
                 if await confirm_btn.count() > 0 and await confirm_btn.is_visible():
                     await confirm_btn.click()
                     logger.info("👉 Đã bấm nút xác nhận gửi mã!")
@@ -1062,22 +1098,22 @@ async def handle_shopee_verification_gate(page, max_wait_seconds: int = 60, noti
         try:
             has_abnormal_call = await page.evaluate('''() => {
                 let t = (document.body.innerText || '').toUpperCase();
-                return (t.includes('HOẠT ĐỘNG BẤT THƯỜNG') || t.includes('ĐỌC MÃ XÁC MINH')) && t.includes('GỌI CHO TÔI');
+                return (t.includes('HOẠT ĐỘNG BẤT THƯỜNG') || t.includes('ĐỌC MÃ XÁC MINH') || t.includes('ABNORMAL ACTIVITY') || t.includes('CALL TO PROVIDE')) && 
+                       (t.includes('GỌI CHO TÔI') || t.includes('CALL ME'));
             }''')
         except Exception:
             pass
 
         if has_abnormal_call:
-            logger.info("📞 Phát hiện popup Cuộc gọi thoại! Bấm 'GỌI CHO TÔI' theo ưu tiên thứ 2...")
+            logger.info("📞 Phát hiện popup Cuộc gọi thoại! Bấm 'GỌI CHO TÔI' / 'Call Me' theo ưu tiên 100%...")
             if notify_callback:
                 try:
                     await notify_callback("📞 Shopee yêu cầu gọi thoại -> Đang bấm 'GỌI CHO TÔI' để nhận mã OTP qua cuộc gọi...")
                 except Exception:
                     pass
 
-            # Bấm 'GỌI CHO TÔI' để nhận cuộc gọi theo đúng yêu cầu ưu tiên của Song
             try:
-                call_btn = page.locator("button:has-text('GỌI CHO TÔI'), button:has-text('Gọi cho tôi'), button:has-text('GỌI')").first
+                call_btn = page.locator("button:has-text('GỌI CHO TÔI'), button:has-text('Gọi cho tôi'), button:has-text('GỌI'), button:has-text('CALL ME'), button:has-text('Call Me'), button:has-text('Call me')").first
                 if await call_btn.count() > 0 and await call_btn.is_visible():
                     await call_btn.click(timeout=3000)
                     logger.info("✅ Đã bấm 'GỌI CHO TÔI'! Đang chuyển tiếp vào màn hình OTP...")
