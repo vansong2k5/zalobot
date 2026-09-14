@@ -338,7 +338,8 @@ def handle_zalo_user_message(
             send_zalo_message(zalo_user_id, "⚠️ Không tìm thấy thông tin tài khoản của bạn.")
             return
 
-        deposit_amount = 50000
+        # Hệ thống chỉ hỗ trợ đúng 3 mốc nạp: 10k, 50k, 100k
+        deposit_amount = 10000  # Mặc định là 10k nếu chỉ gõ NAP
         if len(parts) >= 2:
             raw_amt = parts[1].strip().lower()
             amt_digits = re.sub(r"\D", "", raw_amt)
@@ -346,14 +347,31 @@ def handle_zalo_user_message(
                 val = int(amt_digits)
                 if "k" in raw_amt or (0 < val < 1000):
                     val = val * 1000
-                if val >= 1000:
-                    deposit_amount = val
+                if val <= 20000:
+                    deposit_amount = 10000
+                elif val <= 70000:
+                    deposit_amount = 50000
+                else:
+                    deposit_amount = 100000
+
+        # Lấy hoặc tạo sản phẩm 'Nạp tiền vào ví' để tránh lỗi ForeignKeyViolation
+        deposit_prod = db.query(Product).filter(Product.product_name.ilike("%Nạp tiền%")).first()
+        if not deposit_prod:
+            deposit_prod = Product(
+                product_name="Nạp tiền vào ví",
+                price=0,
+                description="Đơn nạp tiền tự động vào ví qua SePay",
+                status="active"
+            )
+            db.add(deposit_prod)
+            db.commit()
+            db.refresh(deposit_prod)
 
         order_code = generate_unique_order_code(db)
         dep_order = Order(
             order_code=order_code,
             user_id=user.id,
-            product_id=0,
+            product_id=deposit_prod.id,
             quantity=1,
             price=deposit_amount,
             status="pending",
@@ -374,6 +392,7 @@ def handle_zalo_user_message(
             f"👤 Chủ tài khoản: {SEPAY_ACCOUNT_NAME}\n"
             f"✍️ Nội dung CK: {order_code}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ Hệ thống hỗ trợ 3 mốc nạp: 10k, 50k, 100k.\n"
             f"⚠️ BẮT BUỘC ghi đúng nội dung '{order_code}' để hệ thống tự động cộng tiền sau 3 giây!\n"
             f"💡 Soạn 'SODU' để kiểm tra số dư ví bất cứ lúc nào."
         )
