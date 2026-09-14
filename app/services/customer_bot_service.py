@@ -516,19 +516,71 @@ def handle_zalo_user_message(
         if not proxy_raw_input:
             send_zalo_message(
                 zalo_user_id,
-                "🌐 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐓𝐇Ê𝐌 𝐏𝐑𝐎𝐗𝐘 𝐕À𝐎 𝐊𝐇𝐎:\n\n"
+                "🌐 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐓𝐇Ê𝐌 𝐏𝐑𝐎𝐗𝐘:\n\n"
                 "👉 Cú pháp:\n"
                 "ADDPROXY <danh sách proxy>\n\n"
                 "💡 Ví dụ thêm 1 proxy:\n"
                 "ADDPROXY 103.152.118.25:8080\n\n"
-                "💡 Ví dụ thêm nhiều proxy (mỗi proxy 1 dòng):\n"
-                "ADDPROXY\n"
-                "103.152.118.25:8080\n"
-                "user:pass@104.28.1.1:8080\n\n"
+                "💡 Ví dụ có user/pass:\n"
+                "ADDPROXY user:pass@104.28.1.1:8080\n\n"
                 "✨ Bot sẽ tự động test tốc độ và kiểm tra IP sạch trước khi lưu! 🚀"
             )
             return
 
+        from app.services.user_service import is_admin_user
+        from app.services.proxy_validator import parse_and_normalize_proxy, validate_proxy_connection
+        from app.services.proxy_service import load_admin_proxies, save_admin_proxies
+
+        is_admin = is_admin_user(zalo_user_id) or (sender_id and is_admin_user(sender_id))
+
+        if is_admin:
+            # ADMIN THÊM PROXY TOÀN HỆ THỐNG DÙNG ĐẾN KHI DIE
+            raw_lines = re.split(r"[\r\n;,]+", proxy_raw_input.strip())
+            admin_proxies = load_admin_proxies()
+            added_admin = []
+            failed_admin = []
+
+            for raw in raw_lines:
+                cleaned = re.sub(r"^(ADDPROXY|THEMPROXY|PROXY)\s*", "", raw.strip(), flags=re.IGNORECASE).strip()
+                if not cleaned:
+                    continue
+                norm = parse_and_normalize_proxy(cleaned)
+                if not norm:
+                    failed_admin.append(f"{cleaned} (Định dạng không đúng)")
+                    continue
+
+                is_ok, msg, p_info = validate_proxy_connection(norm, timeout=6)
+                if is_ok and p_info:
+                    if norm in admin_proxies:
+                        admin_proxies.remove(norm)
+                    admin_proxies.insert(0, norm)
+                    added_admin.append(f"{norm} (IP: {p_info.get('ip', 'OK')}, Ping: {p_info.get('latency_ms', 0)}ms)")
+                else:
+                    failed_admin.append(f"{cleaned} ({msg})")
+
+            if added_admin:
+                save_admin_proxies(admin_proxies)
+                detail_txt = "\n".join([f"• {p}" for p in added_admin])
+                send_zalo_message(
+                    zalo_user_id,
+                    f"👑 [ADMIN] ĐÃ THIẾT LẬP PROXY HỆ THỐNG TOÀN CỤC! 🎉\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟢 Proxy đang kích hoạt:\n{detail_txt}\n\n"
+                    f"⚡ CƠ CHẾ HOẠT ĐỘNG:\n"
+                    f"• Mọi lượt Reg của khách & admin sẽ tự động dùng Proxy này!\n"
+                    f"• Hệ thống giữ Proxy này chạy liên tục cho đến khi bị die.\n"
+                    f"• Nếu die hoặc không có proxy, hệ thống sẽ tự động fallback về IP mặc định như trước giờ! 🚀"
+                )
+            else:
+                fail_txt = "\n".join([f"• {f}" for f in failed_admin])
+                send_zalo_message(
+                    zalo_user_id,
+                    f"⚠️ [ADMIN] KHÔNG THỂ LƯU PROXY HỆ THỐNG:\n\n{fail_txt}\n\n"
+                    f"👉 Vui lòng kiểm tra lại địa chỉ proxy hoặc cổng kết nối!"
+                )
+            return
+
+        # Khách thường -> Thêm vào kho cá nhân
         from .user_proxy_service import add_user_proxies
         res = add_user_proxies(user_task_key, proxy_raw_input)
         if res.get("ok"):
@@ -683,33 +735,52 @@ def handle_zalo_user_message(
             return
 
         from .user_proxy_service import get_user_verified_proxies, deactivate_dead_proxy
+        from app.services.proxy_service import load_admin_proxies, save_admin_proxies
+        from app.services.proxy_validator import validate_proxy_connection
+        from app.config import DEFAULT_PROXY
 
-        # BƯỚC 2: Kiểm tra kho proxy của user (Bắt buộc phải có proxy riêng để điều hướng)
-        available_proxies, dead_proxies = get_user_verified_proxies(zalo_user_id, count=req_quantity)
+        # BƯỚC 2: Cấp Proxy theo thứ tự ưu tiên:
+        # 1. Proxy riêng của User (nếu user có nạp proxy riêng)
+        # 2. Proxy Hệ Thống do Admin cấu hình (sử dụng đến khi die)
+        # 3. IP mặc định của hệ thống (DEFAULT_PROXY hoặc Direct)
+        available_proxies = []
 
+        # 1. Thử tìm proxy riêng của user
+        user_proxies, dead_proxies = get_user_verified_proxies(zalo_user_id, count=req_quantity)
         if dead_proxies:
             send_zalo_message(
                 zalo_user_id,
                 f"🧹 ĐÃ DỌN DẸP KHO PROXY:\n"
-                f"⚠️ Phát hiện {len(dead_proxies)} proxy đã hết hạn hoặc mất kết nối và đã được tự động loại bỏ."
+                f"⚠️ Phát hiện {len(dead_proxies)} proxy riêng đã hết hạn hoặc mất kết nối và đã được loại bỏ."
             )
+        if user_proxies:
+            available_proxies = user_proxies
 
+        # 2. Nếu user chưa có proxy riêng -> Lấy Proxy Hệ Thống của Admin (dùng đến khi die)
         if not available_proxies:
-            send_zalo_message(
-                zalo_user_id,
-                "⚠️ 𝐁Ạ𝐍 𝐂𝐇Ư𝐀 𝐂Ó 𝐏𝐑𝐎𝐗𝐘 ĐỂ Đ𝐈Ề𝐔 𝐇ƯỚ𝐍𝐆!\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "📌 Mỗi tài khoản Shopee cần được tạo qua 1 Proxy riêng biệt của bạn để đảm bảo an toàn & chống khóa.\n\n"
-                "👉 𝐂Á𝐂𝐇 𝐍Ạ𝐏 𝐏𝐑𝐎𝐗𝐘 𝐂Ủ𝐀 𝐁Ạ𝐍:\n"
-                "Soạn: ADDPROXY <địa_chỉ_proxy>\n\n"
-                "💡 Ví dụ:\n"
-                "• ADDPROXY 116.96.177.251:16863\n"
-                "• ADDPROXY user:pass@103.152.118.25:8080\n\n"
-                "✨ Sau khi thêm proxy thành công, bạn thực hiện lại lệnh REG nhé! 🚀"
-            )
-            return
+            admin_proxies = load_admin_proxies()
+            valid_admin_proxies = []
+            for a_p in admin_proxies:
+                is_alive, msg, _ = validate_proxy_connection(a_p, timeout=5)
+                if is_alive:
+                    valid_admin_proxies.append(a_p)
+                else:
+                    logger.warning(f"Admin proxy {a_p} đã die ({msg}), tự động loại bỏ.")
 
-        total_to_reg = min(req_quantity, len(available_proxies))
+            # Cập nhật danh sách admin proxy nếu có con bị die
+            if len(valid_admin_proxies) != len(admin_proxies):
+                save_admin_proxies(valid_admin_proxies)
+
+            if valid_admin_proxies:
+                sys_p = valid_admin_proxies[0]
+                available_proxies = [sys_p] * req_quantity
+
+        # 3. Nếu không có cả 2 -> Dùng IP mặc định hệ thống như trước giờ (DEFAULT_PROXY hoặc direct)
+        if not available_proxies:
+            def_p = DEFAULT_PROXY or "direct"
+            available_proxies = [def_p] * req_quantity
+
+        total_to_reg = req_quantity
         actual_total_cost = fee_per_acc * total_to_reg
 
         # BƯỚC 3: Trừ tiền ví của khách trước khi khởi chạy
@@ -1221,33 +1292,40 @@ def handle_zalo_user_message(
             send_zalo_message(zalo_user_id, err_msg or "❌ Không tìm thấy tài khoản hợp lệ.")
             return
 
-        # 2. Kiểm tra kho Proxy riêng của user (Bắt buộc phải có proxy riêng trước khi add mail)
+        # 2. Cấp Proxy theo thứ tự ưu tiên:
         from .user_proxy_service import get_user_verified_proxies, deactivate_dead_proxy
-        available_proxies, dead_proxies = get_user_verified_proxies(user_task_key, count=1)
+        from app.services.proxy_service import load_admin_proxies, save_admin_proxies
+        from app.services.proxy_validator import validate_proxy_connection
+        from app.config import DEFAULT_PROXY
 
+        user_proxy = None
+        available_proxies, dead_proxies = get_user_verified_proxies(user_task_key, count=1)
         if dead_proxies:
             send_zalo_message(
                 zalo_user_id,
                 f"🧹 ĐÃ DỌN DẸP KHO PROXY:\n"
-                f"⚠️ Phát hiện {len(dead_proxies)} proxy đã hết hạn hoặc mất kết nối và đã được tự động loại bỏ."
+                f"⚠️ Phát hiện {len(dead_proxies)} proxy riêng đã hết hạn hoặc mất kết nối và đã được loại bỏ."
             )
 
-        if not available_proxies:
-            send_zalo_message(
-                zalo_user_id,
-                "⚠️ 𝐁Ạ𝐍 𝐂𝐇Ư𝐀 𝐂Ó 𝐏𝐑𝐎𝐗𝐘 ĐỂ 𝐓𝐇Ự𝐂 𝐇𝐈Ệ𝐍 𝐆Á𝐍 𝐄𝐌𝐀𝐈𝐋!\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "📌 Mỗi tài khoản Shopee cần được thao tác qua 1 Proxy riêng của bạn để đảm bảo an toàn & chống khóa nick.\n\n"
-                "👉 𝐂Á𝐂𝐇 𝐍Ạ𝐏 𝐏𝐑𝐎𝐗𝐘 𝐂Ủ𝐀 𝐁Ạ𝐍:\n"
-                "Soạn: ADDPROXY <địa_chỉ_proxy>\n\n"
-                "💡 Ví dụ:\n"
-                "• ADDPROXY 116.96.177.251:16863\n"
-                "• ADDPROXY user:pass@103.152.118.25:8080\n\n"
-                "✨ Sau khi thêm proxy thành công, bạn soạn lại lệnh ADDMAIL nhé! 🚀"
-            )
-            return
+        if available_proxies:
+            user_proxy = available_proxies[0]
+        else:
+            # Kiểm tra proxy hệ thống của Admin
+            admin_proxies = load_admin_proxies()
+            valid_admin = []
+            for a_p in admin_proxies:
+                is_alive, msg, _ = validate_proxy_connection(a_p, timeout=5)
+                if is_alive:
+                    valid_admin.append(a_p)
+                else:
+                    logger.warning(f"Admin proxy {a_p} đã die ({msg}), tự động loại bỏ.")
+            if len(valid_admin) != len(admin_proxies):
+                save_admin_proxies(valid_admin)
 
-        user_proxy = available_proxies[0]
+            if valid_admin:
+                user_proxy = valid_admin[0]
+            else:
+                user_proxy = DEFAULT_PROXY or "direct"
 
         # 3. Khởi tạo khóa tiến trình độc quyền cho User
         task_title = f"Gán Email [#{stock.id}]"
@@ -1269,7 +1347,7 @@ def handle_zalo_user_message(
                 stock,
                 custom_email=custom_email,
                 proxy=user_proxy,
-                strict_user_proxy=True
+                strict_user_proxy=False
             )
 
             if result.get("ok"):

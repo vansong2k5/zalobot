@@ -102,17 +102,20 @@ class ShopeeRegService:
             timeline_logs.append(entry)
             logger.info(f"[{platform.upper()}:{zalo_user_id or 'SYSTEM'}] {msg}")
 
-        async def notify(msg: str, step_label: str = "", send_to_user: bool = False):
+        async def notify(msg: str, step_label: str = "", send_to_user: bool = True):
             full_msg = f"{prefix}{msg}".strip()
             log_step(full_msg)
             if step_label and zalo_user_id:
                 update_user_task_progress(zalo_user_id, f"{prefix}{step_label}".strip())
-            # Chỉ gửi tin nhắn đến Zalo người dùng khi thật sự cần thiết (tránh spam log)
+            # Luôn gửi tin nhắn tiến độ đến Zalo người dùng
             if send_to_user and progress_callback:
-                if asyncio.iscoroutinefunction(progress_callback):
-                    await progress_callback(full_msg)
-                else:
-                    progress_callback(full_msg)
+                try:
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        await progress_callback(full_msg)
+                    else:
+                        progress_callback(full_msg)
+                except Exception as ex_cb:
+                    logger.error(f"Lỗi gửi progress_callback: {ex_cb}")
 
         # 1. Khóa phân lập luồng theo từng User (Người này không chặn người kia, nhưng 1 user không được spam click)
         user_key = f"{platform}_{zalo_user_id}" if zalo_user_id else f"anon_{random.randint(1000, 9999)}"
@@ -180,15 +183,44 @@ class ShopeeRegService:
                 log_step(f"{prefix}Bắt đầu khởi động worker đăng ký tài khoản...")
 
             # -------------------------------------------------------------
-            # BƯỚC 1: Validate Proxy (Log âm thầm vào file, không spam Zalo)
+            # BƯỚC 1: Validate Proxy (Ưu tiên proxy truyền vào, nếu die thì fallback về default/direct)
             # -------------------------------------------------------------
-            is_p_valid, p_msg, p_info = validate_proxy_connection(user_proxy)
-            if not is_p_valid:
-                self._update_db_log(record_id, status="failed", step_failed="proxy", error_msg=p_msg, logs=timeline_logs)
-                return {"ok": False, "step": "proxy", "error": f"❌ Lỗi đường truyền Proxy: {p_msg}", "should_refund": True}
+            from app.config import DEFAULT_PROXY
+            pw_proxy = None
+            external_ip = "DIRECT"
 
-            proxy_url = p_info["proxy_url"]
-            external_ip = p_info["ip"]
+            if user_proxy and user_proxy != "direct":
+                is_p_valid, p_msg, p_info = validate_proxy_connection(user_proxy)
+                if is_p_valid and p_info:
+                    proxy_url = p_info["proxy_url"]
+                    external_ip = p_info["ip"]
+                    if "@" in proxy_url:
+                        auth_part, host_port = proxy_url.replace("http://", "").replace("https://", "").replace("socks5://", "").split("@")
+                        user_p, pwd_p = auth_part.split(":")
+                        pw_proxy = {
+                            "server": f"http://{host_port}",
+                            "username": user_p,
+                            "password": pwd_p
+                        }
+                    else:
+                        pw_proxy = {"server": proxy_url}
+                    log_step(f"Đang sử dụng Proxy: {external_ip}")
+                else:
+                    log_step(f"⚠️ Proxy {user_proxy} không khả dụng ({p_msg}). Đang tự động fallback về IP mặc định...")
+                    from app.services.proxy_service import remove_admin_proxy
+                    remove_admin_proxy(user_proxy)
+                    if DEFAULT_PROXY and DEFAULT_PROXY != "direct":
+                        pw_proxy = {"server": DEFAULT_PROXY}
+                        external_ip = "DEFAULT_PROXY"
+                    else:
+                        pw_proxy = None
+            else:
+                if DEFAULT_PROXY and DEFAULT_PROXY != "direct":
+                    pw_proxy = {"server": DEFAULT_PROXY}
+                    external_ip = "DEFAULT_PROXY"
+                else:
+                    pw_proxy = None
+                log_step("Đang sử dụng kết nối IP mặc định của hệ thống")
             from app.config import VIOTP_SERVICE_ID
             target_service_id = service_id or VIOTP_SERVICE_ID or 20
             max_phone_tries = 1 if provided_phone else 3

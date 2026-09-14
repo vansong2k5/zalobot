@@ -21,13 +21,16 @@ from app.config import SADCAPTCHA_API_KEY
 
 logger = logging.getLogger("CaptchaSolverService")
 
+_sadcaptcha_disabled = False
+
 def query_sadcaptcha_puzzle(puzzle_b64: str, piece_b64: str) -> Optional[float]:
     """
     Gọi SadCaptcha API chuyên dụng cho Shopee (/shopee-image-drag) hoặc fallback (/puzzle)
     để lấy tỉ lệ trượt proportion chính xác từ AI Cloud.
     Trả về: float proportion (0.0 .. 1.0) hoặc None nếu lỗi/hết credit.
     """
-    if not SADCAPTCHA_API_KEY:
+    global _sadcaptcha_disabled
+    if not SADCAPTCHA_API_KEY or _sadcaptcha_disabled:
         return None
 
     payload = {
@@ -48,6 +51,10 @@ def query_sadcaptcha_puzzle(puzzle_b64: str, piece_b64: str) -> Optional[float]:
                     prop = float(p_x)
                     logger.info("🤖 [SadCaptcha Shopee-Drag] AI giải thành công proportion = %.4f", prop)
                     return prop
+        elif resp.status_code in (401, 403):
+            _sadcaptcha_disabled = True
+            logger.warning("SadCaptcha API Key không hợp lệ hoặc hết hạn (%d). Đã chuyển sang Vision Solver nội bộ.", resp.status_code)
+            return None
     except Exception as ex:
         logger.warning("Lỗi gọi SadCaptcha /shopee-image-drag: %s", ex)
 
@@ -62,6 +69,8 @@ def query_sadcaptcha_puzzle(puzzle_b64: str, piece_b64: str) -> Optional[float]:
                 logger.info("🤖 [SadCaptcha Puzzle] AI giải thành công slideXProportion = %.4f", prop)
                 return float(prop)
         else:
+            if resp.status_code in (401, 403):
+                _sadcaptcha_disabled = True
             logger.warning("SadCaptcha API trả về mã lỗi %d: %s", resp.status_code, resp.text[:200])
     except Exception as ex:
         logger.warning("Lỗi kết nối SadCaptcha API: %s", ex)
