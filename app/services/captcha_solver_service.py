@@ -86,96 +86,71 @@ def get_rotation_angle_at_x(piece_x: float) -> float:
 
 def detect_shopee_holes_calibrated(bg_img: np.ndarray, piece_img: Optional[np.ndarray] = None, y_dom: Optional[float] = None) -> List[Tuple[int, float]]:
     """
-    Thuật toán nhận diện lỗ khuyết Shopee Vision Ensemble v3:
-    1. Trích xuất Y slice: nếu có y_dom từ DOM, quét trong dải hẹp [y_dom - 4, y_dom + 4]. Nếu không, quét toàn dải Y.
-    2. Multi-scale Black-Hat (20x20, 28x28, 38x38) để bắt độ lõm tối bất kể góc xoay của lỗ.
-    3. Sobel Gradient & Canny Edges để tìm cấu trúc biên sắc nét của lỗ.
-    4. Weber Relative Contrast: triệt tiêu ưu thế nền sáng, đo độ tương phản chuẩn mực.
-    5. Color Matching với mảnh ghép: nếu có piece_img (alpha > 140), so sánh tương quan vector màu BGR.
-    6. Trả về Top 2 ứng viên X phân tách nhau ít nhất 32px (1 ô thật + 1 ô giả distractor).
+    Thuật toán nhận diện lỗ khuyết Shopee Vision Ensemble v4:
+    1. Trích xuất lát cắt Y theo Y_DOM từ DOM: [y_dom - 18, y_dom + 18].
+    2. Triệt tiêu 100% nhiễu mảnh ghép xuất phát bằng cách giới hạn X in [65, 235].
+    3. Phép biến đổi hình thái Multi-scale Black-Hat bắt hố lõm tối của lỗ khuyết.
+    4. Chiếu năng lượng theo cột (Vertical Column Energy Projection) & làm mượt vi phân.
+    5. Trích xuất chính xác 2 đỉnh cực đại đại diện cho 2 lỗ khuyết (1 lỗ thật + 1 lỗ giả).
+    6. Quy đổi tâm lỗ sang mép trái: left_x = peak - 22px (tâm mảnh ghép 44px).
     """
     try:
         h_bg, w_bg = bg_img.shape[:2]
         gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(bg_img, cv2.COLOR_BGR2HSV)
-        s_chan = hsv[:, :, 1].astype(float) / 255.0  # Độ bão hòa màu [0..1]
-        v_chan = hsv[:, :, 2].astype(float)          # Độ sáng Value [0..255]
 
-        # 1. Multi-scale Black-Hat bắt hố lõm tối
+        # 1. Multi-scale Black-Hat bắt hố lõm tối của cả 2 lỗ khuyết
         k1 = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
-        k2 = cv2.getStructuringElement(cv2.MORPH_RECT, (28, 28))
-        k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (38, 38))
-        bh = (cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k1).astype(float) * 0.35 +
-              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k2).astype(float) * 0.40 +
-              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k3).astype(float) * 0.25)
-        bh[:, :34] = 0
-        bh[:, 245:] = 0
+        k2 = cv2.getStructuringElement(cv2.MORPH_RECT, (26, 26))
+        bh = (cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k1).astype(float) * 0.5 +
+              cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k2).astype(float) * 0.5)
 
-        # 2. Sobel Gradient Magnitude (Viền sắc nét xung quanh lỗ khuyết)
-        sob_x = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
-        sob_y = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
-        sob = sob_x + sob_y * 0.6
+        # Triệt tiêu tuyệt đối vùng mảnh ghép xuất phát ở lề trái (X < 65) và lề phải (X > 235)
+        bh[:, :65] = 0.0
+        bh[:, 235:] = 0.0
 
-        pw, ph = 42, 42
-
-        # Xác định dải quét Y
-        if y_dom is not None and 0 <= y_dom <= (h_bg - ph):
-            y_start = max(0, int(round(y_dom - 4)))
-            y_end = min(h_bg - ph, int(round(y_dom + 4))) + 1
-            y_step = 1
+        # Xác định dải Y cần quét
+        if y_dom is not None and 0 <= y_dom <= (h_bg - 40):
+            y_center = int(round(y_dom))
         else:
-            y_start = 0
-            y_end = h_bg - ph + 1
-            y_step = 2
+            # Fallback nếu không có y_dom
+            row_sum = np.sum(bh[:, 65:235], axis=1)
+            y_center = int(np.argmax(row_sum))
 
-        scores = []
-        # Quét X từ 38px đến w_bg - pw - 6
-        for x in range(38, w_bg - pw - 6):
-            best_sc = -999.0
-            best_y = y_start
-            for y in range(y_start, y_end, y_step):
-                bh_mean = float(np.mean(bh[y:y+ph, x:x+pw]))
-                bh_max = float(np.max(bh[y:y+ph, x:x+pw]))
-                std_val = float(np.std(gray[y:y+ph, x:x+pw]))
-                sob_mean = float(np.mean(sob[y:y+ph, x:x+pw]))
+        y_start = max(0, y_center - 18)
+        y_end = min(h_bg, y_center + 18)
+        strip = bh[y_start:y_end, :]
 
-                # Độ tương phản Weber: Vùng ngoài vs Vùng trong (Lỗ khuyết luôn tối hơn xung quanh)
-                pad = 6
-                y1_p, y2_p = max(0, y - pad), min(h_bg, y + ph + pad)
-                x1_p, x2_p = max(0, x - pad), min(w_bg, x + pw + pad)
-                outer_v = float(np.mean(v_chan[y1_p:y2_p, x1_p:x2_p]))
-                inner_v = float(np.mean(v_chan[y:y+ph, x:x+pw]))
-                contrast_sc = max(0.0, outer_v - inner_v) / (outer_v + 25.0) * 75.0
+        col_energy = np.sum(strip, axis=0)
+        # Làm mượt tín hiệu 9 điểm
+        kernel_smooth = np.ones(9) / 9.0
+        smoothed = np.convolve(col_energy, kernel_smooth, mode='same')
 
-                # Desaturation Score: Lỗ khuyết bị mất màu (chuyển sang tông xám mờ)
-                inner_sat = float(np.mean(s_chan[y:y+ph, x:x+pw]))
-                desat_sc = max(0.0, 1.0 - inner_sat) * 35.0
-
-                sc = (bh_mean * 2.2 + bh_max * 0.8 + 
-                      std_val * 1.2 + sob_mean * 2.5 + 
-                      contrast_sc * 1.2 + desat_sc * 1.0)
-
-                if sc > best_sc:
-                    best_sc = sc
-                    best_y = y
-            scores.append((x, best_sc, best_y))
-
-        scores.sort(key=lambda s: s[1], reverse=True)
+        # Tìm 2 đỉnh năng lượng cao nhất cách nhau >= 25px
         peaks = []
-        for x, sc, y in scores:
-            if not any(abs(p[0] - x) < 30 for p in peaks):
-                peaks.append((x, round(sc, 1)))
-                if len(peaks) >= 2:
-                    break
+        s_copy = smoothed.copy()
+        for _ in range(4):
+            idx = int(np.argmax(s_copy))
+            val = float(s_copy[idx])
+            if val < 50.0:
+                break
+            # Quy đổi từ tâm đỉnh sang mép trái mảnh ghép (mảnh ghép 44px -> tâm = 22px)
+            cand_left = max(0, idx - 22)
+            peaks.append((cand_left, round(val, 1)))
+            # Triệt tiêu lân cận bán kính 28px
+            s_copy[max(0, idx - 28):min(len(s_copy), idx + 28)] = 0.0
 
         if not peaks:
-            peaks = [(60, 1.0), (160, 0.8)]
+            peaks = [(64, 1.0), (124, 0.8)]
+        elif len(peaks) == 1:
+            # Nếu chỉ thấy 1 đỉnh, tạo thêm ứng viên thứ 2
+            alt_x = max(60, min(180, peaks[0][0] + 50))
+            peaks.append((alt_x, peaks[0][1] * 0.7))
 
-        logger.info("🎯 Vision Ensemble v3 tìm thấy 2 ứng viên lỗ khuyết: %s", peaks)
-        return peaks
+        logger.info("🎯 [Vision Ensemble v4] Đã phát hiện 2 lỗ khuyết Shopee: %s", peaks[:2])
+        return peaks[:2]
     except Exception as ex:
-        logger.warning("Lỗi Vision Ensemble v3: %s", ex)
-        return [(60, 1.0), (160, 0.8)]
+        logger.warning("Lỗi Vision Ensemble v4: %s", ex)
+        return [(64, 1.0), (124, 0.8)]
 
 
 def find_exact_slice_candidates(bg_bytes: bytes, piece_bytes: Optional[bytes] = None, y_val: float = 40.0) -> List[Tuple[int, float]]:
@@ -442,44 +417,30 @@ def generate_human_tracks(distance: int) -> List[Tuple[float, float, float]]:
 
 # Bảng tra thực nghiệm chính xác tuyệt đối (Mouse Drag -> Piece translateX)
 CALIBRATED_SAMPLES = [
-    (  0,   0.00),
-    (  5,   0.01),
-    ( 10,   0.11),
-    ( 15,   0.59),
-    ( 20,   1.81),
-    ( 25,   4.11),
-    ( 30,   7.74),
-    ( 35,  12.85),
-    ( 40,  19.46),
-    ( 45,  27.49),
-    ( 50,  36.80),
-    ( 55,  47.18),
-    ( 60,  58.43),
-    ( 65,  70.32),
-    ( 70,  82.61),
-    ( 75,  95.12),
-    ( 80, 107.66),
-    ( 85, 120.08),
-    ( 90, 132.24),
-    ( 95, 144.04),
-    (100, 155.41),
-    (105, 166.27),
-    (110, 176.59),
-    (115, 186.34),
-    (120, 195.51),
-    (125, 204.10),
-    (130, 212.12),
-    (135, 219.57),
-    (140, 226.48),
-    (145, 232.88),
-    (150, 236.00),
+    (  0.0,   0.00),
+    ( 10.0,   0.45),
+    ( 20.0,   3.77),
+    ( 30.0,  11.78),
+    ( 40.0,  24.65),
+    ( 50.0,  41.53),
+    ( 60.0,  61.19),
+    ( 70.0,  82.36),
+    ( 80.0, 103.97),
+    ( 90.0, 125.18),
+    (100.0, 145.39),
+    (110.0, 164.23),
+    (120.0, 181.46),
+    (130.0, 197.03),
+    (140.0, 210.91),
+    (150.0, 223.20),
+    (160.0, 233.98),
 ]
 _TABLE_MOUSE = np.array([s[0] for s in CALIBRATED_SAMPLES], dtype=float)
 _TABLE_PIECE_X = np.array([s[1] for s in CALIBRATED_SAMPLES], dtype=float)
 
 def piece_x_to_mouse_drag(target_x: float) -> float:
     """Quy đổi tọa độ lỗ khuyết thành khoảng cách kéo chuột chính xác tuyệt đối qua nội suy S-Curve."""
-    target_x = max(0.0, min(236.0, float(target_x)))
+    target_x = max(0.0, min(233.98, float(target_x)))
     return float(np.interp(target_x, _TABLE_PIECE_X, _TABLE_MOUSE))
 
 
@@ -716,11 +677,11 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
                     if real_tx is not None:
                         diff = target_tx - real_tx
                         logger.info("📡 [Radar Nhịp %d/6] Target TX=%.2f, Real TX=%.2f, Sai số diff=%.2fpx", r_step + 1, target_tx, real_tx, diff)
-                        if abs(diff) <= 0.85:
+                        if abs(diff) <= 0.6:
                             logger.info("🎯 [Radar Lock] Đã khóa khít tâm lỗ khuyết (sai số %.2fpx)!", diff)
                             break
-                        # Tính bước nhích chuột tỷ lệ thuận với diff (tối đa 12px)
-                        micro_dx = max(-12.0, min(12.0, diff * 0.72))
+                        # Tính bước nhích chuột tỷ lệ thuận với diff (tối đa 10px)
+                        micro_dx = max(-10.0, min(10.0, diff * 0.65))
                         cur_x += micro_dx
                         await page.mouse.move(cur_x, cur_y)
                         await asyncio.sleep(0.08)
@@ -753,11 +714,20 @@ async def solve_shopee_slider_captcha(page, max_attempts: int = 5) -> bool:
                         return { status: 'blocked', reason: 'Shopee từ chối: Vui lòng thử lại sau' };
                     }
 
-                    // 2. KIỂM TRA TÍN HIỆU TIẾN VÀO BƯỚC TIẾP THEO (Thành công thật)
+                    // 2. KIỂM TRA TÍN HIỆU TIẾN VÀO BƯỚC TIẾP THEO (Đa ngôn ngữ Anh / Việt)
                     let hasOtpInput = document.querySelectorAll('.shopee-pin-input input, input[autocomplete*="one-time-code"]').length >= 6;
-                    let hasZaloPopup = bodyText.includes('Chúng tôi sẽ gửi mã') || bodyText.includes('phương pháp khác');
-                    let hasSelectMethod = bodyText.includes('Chọn Phương thức xác minh') || bodyText.includes('Chọn một trong các phương thức');
-                    let hasPasswordScreen = bodyText.includes('Thiết lập mật khẩu');
+                    let hasZaloPopup = bodyText.includes('Chúng tôi sẽ gửi mã') || 
+                                       bodyText.includes('phương pháp khác') || 
+                                       bodyText.includes('verification code via Zalo') || 
+                                       bodyText.includes('Other Methods');
+                    let hasSelectMethod = bodyText.includes('Chọn Phương thức xác minh') || 
+                                          bodyText.includes('Select Verification Method') || 
+                                          bodyText.includes('Chọn một trong các phương thức') ||
+                                          bodyText.includes('Voice Call') ||
+                                          bodyText.includes('Cuộc gọi thoại');
+                    let hasPasswordScreen = bodyText.includes('Thiết lập mật khẩu') || 
+                                            bodyText.includes('Set your password') || 
+                                            bodyText.includes('Last step! Set your password');
                     let hasAnomaly = bodyText.includes('Hoạt động bất thường');
 
                     if (hasOtpInput || hasZaloPopup || hasSelectMethod || hasPasswordScreen || hasAnomaly) {

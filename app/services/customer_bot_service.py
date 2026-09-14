@@ -119,6 +119,9 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
         ICONS = {1: "💎", 2: "🎬", 3: "🤖", 4: "🎨", 5: "📚", 6: "📱", 7: "☕"}
         for p in products:
             p_name_lower = p.product_name.lower()
+            if "nạp tiền" in p_name_lower or "nap tien" in p_name_lower or p.id == 8 or float(p.price or 0.0) <= 0:
+                continue
+
             if p.id in [3, 5] or "drive" in p_name_lower:
                 stock_tag = "🟢 Sẵn hàng 24/7"
             elif p.id == 6 or "thuê sim" in p_name_lower or "otp" in p_name_lower:
@@ -139,6 +142,7 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
 
     lines.extend([
         "⚡ 𝐋Ố𝐈 𝐓Ắ𝐂 𝐌𝐔𝐀 𝐒𝐈Ê𝐔 𝐓Ố𝐂:",
+        "👉 Nạp tiền vào ví: Nhắn NAP (Tối thiểu 10k)",
         "👉 Mua 1 cái: Nhắn số [Mã] (Ví dụ: 1 hoặc 6)",
         "👉 Mua nhiều: BUY <Mã> <SL> (Ví dụ: BUY 1 2)",
         "👉 Check SĐT Shopee: CHECKSDT <SĐT> (hoặc gửi SĐT)",
@@ -332,27 +336,53 @@ def handle_zalo_user_message(
     # =========================================================================
     # LỆNH 1.2: NẠP TIỀN VÀO VÍ TỰ ĐỘNG (NAP [Số tiền])
     # =========================================================================
-    if first_word == "NAP":
+    if first_word in ["NAP", "NAPTIEN", "NẠP"]:
         send_chat_action(zalo_user_id, "typing")
         if not user:
-            send_zalo_message(zalo_user_id, "⚠️ Không tìm thấy thông tin tài khoản của bạn.")
+            send_zalo_message(zalo_user_id, "⚠️ Không tìm thấy thông tin tài khoản của bạn. Soạn MENU để bắt đầu nhé!")
             return
 
-        # Hệ thống chỉ hỗ trợ đúng 3 mốc nạp: 10k, 50k, 100k
-        deposit_amount = 10000  # Mặc định là 10k nếu chỉ gõ NAP
-        if len(parts) >= 2:
-            raw_amt = parts[1].strip().lower()
-            amt_digits = re.sub(r"\D", "", raw_amt)
-            if amt_digits:
-                val = int(amt_digits)
-                if "k" in raw_amt or (0 < val < 1000):
-                    val = val * 1000
-                if val <= 20000:
-                    deposit_amount = 10000
-                elif val <= 70000:
-                    deposit_amount = 50000
-                else:
-                    deposit_amount = 100000
+        # Nếu người dùng chỉ gõ NAP / NAPTIEN / NẠP mà không kèm số tiền
+        if len(parts) == 1 or (len(parts) == 2 and parts[1].upper() in ["TIEN", "TIỀN", "VÍ", "VI"]):
+            nap_menu = (
+                "💳 𝐂Ổ𝐍𝐆 𝐍Ạ𝐏 𝐓𝐈Ề𝐍 𝐕À𝐎 𝐕Í 𝐓Ự ĐỘ𝐍𝐆 (𝟐𝟒/𝟕)\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "⚡ Hệ thống nạp tự động qua VietQR - SePay, cộng tiền sau 3 giây!\n"
+                "📌 Số tiền nạp tối thiểu: 10,000 VNĐ / lần.\n\n"
+                "⚡ 𝐂Á𝐂 𝐆Ó𝐈 𝐍Ạ𝐏 𝐍𝐇𝐀𝐍𝐇 (Soạn theo cú pháp):\n"
+                "👉 NAP 10K   ➔ Nạp 10,000 VNĐ\n"
+                "👉 NAP 20K   ➔ Nạp 20,000 VNĐ\n"
+                "👉 NAP 50K   ➔ Nạp 50,000 VNĐ\n"
+                "👉 NAP 100K  ➔ Nạp 100,000 VNĐ\n"
+                "👉 NAP 200K  ➔ Nạp 200,000 VNĐ\n\n"
+                "💡 𝐇𝐎Ặ𝐂 𝐍Ạ𝐏 𝐒Ố 𝐓𝐈Ề𝐍 𝐓Ù𝐘 Ý:\n"
+                "👉 Soạn: NAP <Số tiền> (Ví dụ: NAP 30000 hoặc NAP 150K)\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "✨ Hãy soạn một trong các lệnh trên để lấy mã QR nạp tiền ngay nhé! 🚀"
+            )
+            send_zalo_message(zalo_user_id, nap_menu)
+            return
+
+        # Parse số tiền người dùng nhập
+        raw_amt = parts[1].strip().lower()
+        amt_digits = re.sub(r"\D", "", raw_amt)
+        deposit_amount = 0
+        if amt_digits:
+            val = int(amt_digits)
+            if "k" in raw_amt or (0 < val < 1000):
+                val = val * 1000
+            deposit_amount = val
+
+        # Kiểm tra mức nạp tối thiểu 10,000 VNĐ
+        if deposit_amount < 10000:
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ 𝐒Ố 𝐓𝐈Ề𝐍 𝐍Ạ𝐏 𝐊𝐇Ô𝐍𝐆 𝐇Ợ𝐏 𝐋Ệ!\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "📌 Hệ thống quy định số tiền nạp tối thiểu là 10,000 VNĐ.\n\n"
+                "👉 Bạn vui lòng soạn: NAP 10K hoặc chọn các gói lớn hơn (NAP 20K, NAP 50K, NAP 100K) nhé! ✨"
+            )
+            return
 
         # Lấy hoặc tạo sản phẩm 'Nạp tiền vào ví' để tránh lỗi ForeignKeyViolation
         deposit_prod = db.query(Product).filter(Product.product_name.ilike("%Nạp tiền%")).first()
@@ -392,8 +422,8 @@ def handle_zalo_user_message(
             f"👤 Chủ tài khoản: {SEPAY_ACCOUNT_NAME}\n"
             f"✍️ Nội dung CK: {order_code}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Hệ thống hỗ trợ 3 mốc nạp: 10k, 50k, 100k.\n"
-            f"⚠️ BẮT BUỘC ghi đúng nội dung '{order_code}' để hệ thống tự động cộng tiền sau 3 giây!\n"
+            f"⚡ Hệ thống tự động kiểm tra và cộng tiền vào ví sau 3 giây!\n"
+            f"⚠️ BẮT BUỘC ghi đúng nội dung '{order_code}' để được cộng tiền tự động!\n"
             f"💡 Soạn 'SODU' để kiểm tra số dư ví bất cứ lúc nào."
         )
         sent = send_zalo_photo(zalo_user_id, qr_url, caption=caption)
@@ -551,7 +581,6 @@ def handle_zalo_user_message(
             )
             return
 
-        from app.services.user_service import is_admin_user
         from app.services.proxy_validator import parse_and_normalize_proxy, validate_proxy_connection
         from app.services.proxy_service import load_admin_proxies, save_admin_proxies
 
