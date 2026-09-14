@@ -89,8 +89,8 @@ def find_user_stock_by_identifier(
         stock_id = int(clean_id)
         stock = db.query(ProductStock).filter(ProductStock.id == stock_id).first()
         if stock:
-            # Kiểm tra xem tài khoản này đã bán cho user này chưa
-            if not stock.order or stock.order.user_id != user_id:
+            # Kiểm tra xem tài khoản này đã bán cho user này chưa (tránh thao tác trên nick đã thu hồi hoặc chưa bán)
+            if not stock.order or stock.order.user_id != user_id or stock.status != "sold":
                 return None, f"⛔ Bạn không có quyền thao tác trên tài khoản ID [#{stock_id}]."
             return stock, None
 

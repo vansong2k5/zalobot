@@ -48,6 +48,7 @@ from .phone_check_service import (
     check_shopee_phone,
     format_phone_check_result,
 )
+from .feature_service import is_feature_active
 
 
 COMMAND_KEYWORDS = {
@@ -107,7 +108,7 @@ def format_price_tag(amount: Union[Decimal, float, int]) -> str:
 
 def render_product_menu_text(db: Session, target_name: str = "") -> str:
     """Tạo bảng menu sản phẩm phong cách trực quan, bắt mắt."""
-    products = db.query(Product).filter(Product.status == "active").order_by(Product.id.asc()).all()
+    products = db.query(Product).order_by(Product.id.asc()).all()
     greeting = f"👋 Hé lô {target_name}! Chúc bạn săn deal vui vẻ 🚀\n" if target_name else ""
 
     lines = [
@@ -125,7 +126,9 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
             if "nạp tiền" in p_name_lower or "nap tien" in p_name_lower or p.id == 8 or float(p.price or 0.0) <= 0:
                 continue
 
-            if p.id in [3, 5] or "drive" in p_name_lower:
+            if p.status != "active":
+                stock_tag = "🔴 Tạm dừng phục vụ (Bảo trì)"
+            elif p.id in [3, 5] or "drive" in p_name_lower:
                 stock_tag = "🟢 Sẵn hàng 24/7"
             elif p.id == 6 or "thuê sim" in p_name_lower or "otp" in p_name_lower:
                 stock_tag = "🟢 Sẵn sàng (Cấp số tự động 24/7)"
@@ -146,8 +149,9 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
     lines.extend([
         "⚡ 𝐋Ố𝐈 𝐓Ắ𝐂 𝐌𝐔𝐀 𝐒𝐈Ê𝐔 𝐓Ố𝐂:",
         "👉 Nạp tiền vào ví: Nhắn NAP (Tối thiểu 10k)",
-        "👉 Mua 1 cái: Nhắn số [Mã] (Ví dụ: 1 hoặc 6)",
-        "👉 Mua nhiều: BUY <Mã> <SL> (Ví dụ: BUY 1 2)",
+        "👉 Mua bằng số dư ví: BUY <Mã> (Ví dụ: BUY 1 - An toàn, tránh bấm nhầm)",
+        "👉 Lấy QR chuyển khoản: Nhắn số [Mã] (Ví dụ: 1 hoặc 6)",
+        "👉 Mua nhiều cái: BUY <Mã> <SL> (Ví dụ: BUY 1 2)",
         "👉 Check SĐT Shopee: CHECKSDT <SĐT> (hoặc gửi SĐT)",
         "👉 Lấy mã OTP: Nhắn OTP",
         "👉 Xem số dư ví: Nhắn SODU",
@@ -209,6 +213,12 @@ def handle_zalo_user_message(
     # 2. Tự động nhận diện mã vận đơn SPX Express (SPXVN...) ở bất kỳ đâu trong tin nhắn
     spx_match = re.search(r"\b(SPXVN[A-Z0-9]+)\b", clean_text, re.IGNORECASE)
     if spx_match:
+        if not is_feature_active(db, "TRACK"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng TRA CỨU VẬN ĐƠN SPX hiện đang tạm dừng để bảo trì. Vui lòng thử lại sau nhé!"
+            )
+            return
         spx_code = spx_match.group(1).upper()
         send_chat_action(zalo_user_id, "typing")
         from .tracking_service import format_tracking_result
@@ -291,7 +301,14 @@ def handle_zalo_user_message(
         return
 
     # Khách gõ nhanh 1 con số (ví dụ: '1') để mua sản phẩm mã 1 (tối đa 3 chữ số, không phải SĐT)
-    is_quick_buy_number = len(parts) == 1 and parts[0].isdigit() and len(parts[0]) <= 3 and not extract_phone_number(parts[0])
+    # Kiểm tra tính năng QUICK_BUY: nếu admin dừng tính năng QUICK_BUY thì bỏ qua việc nhận diện số trần trụi
+    is_quick_buy_number = (
+        is_feature_active(db, "QUICK_BUY")
+        and len(parts) == 1
+        and parts[0].isdigit()
+        and len(parts[0]) <= 3
+        and not extract_phone_number(parts[0])
+    )
 
     # =========================================================================
     # LỆNH 1: XEM MENU SẢN PHẨM (MENU)
@@ -356,6 +373,13 @@ def handle_zalo_user_message(
     if first_word in ["OTP", "LAYOTP", "CHECKOTP", "MAOTP"] or raw_text_clean in [
         "OTP", "LAY OTP", "LẤY OTP", "MÃ OTP", "MA OTP", "CHECK OTP", "XEM OTP", "XEMOTP", "XIN OTP", "XIN MA"
     ]:
+        if not is_feature_active(db, "OTP"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng TRA CỨU & CẤP MÃ OTP hiện đang tạm dừng để bảo trì tổng đài.\n"
+                "👉 Vui lòng liên hệ trực tiếp Admin để được hỗ trợ!"
+            )
+            return
         send_chat_action(zalo_user_id, "typing")
         if not user:
             send_zalo_message(zalo_user_id, "⚠️ Không tìm thấy thông tin tài khoản của bạn. Soạn MENU để bắt đầu nhé!")
@@ -459,6 +483,13 @@ def handle_zalo_user_message(
     # =========================================================================
     phone_to_check = None
     if first_word == "CHECKSDT":
+        if not is_feature_active(db, "CHECKSDT"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng KIỂM TRA SỐ ĐIỆN THOẠI SHOPEE hiện đang tạm dừng để bảo trì hệ thống.\n"
+                "👉 Vui lòng quay lại sau ít phút!"
+            )
+            return
         phone_to_check = extract_phone_number(text) or (parts[1] if len(parts) >= 2 else None)
         if not phone_to_check:
             send_zalo_message(
@@ -470,7 +501,8 @@ def handle_zalo_user_message(
             )
             return
     elif first_word not in COMMAND_KEYWORDS and not is_quick_buy_number:
-        phone_to_check = extract_phone_number(text)
+        if is_feature_active(db, "CHECKSDT"):
+            phone_to_check = extract_phone_number(text)
 
     if phone_to_check:
         with ZaloTypingKeeper(zalo_user_id):
@@ -498,6 +530,12 @@ def handle_zalo_user_message(
         from app.services.proxy_service import normalize_proxy_url as parse_and_normalize_proxy, validate_proxy_connection, load_admin_proxies, save_admin_proxies
 
         is_admin = is_admin_user(zalo_user_id) or (sender_id and is_admin_user(sender_id))
+        if not is_admin and not is_feature_active(db, "PROXY"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng KHO PROXY hiện đang tạm dừng để bảo trì. Vui lòng quay lại sau!"
+            )
+            return
 
         if is_admin:
             # ADMIN THÊM PROXY TOÀN HỆ THỐNG DÙNG ĐẾN KHI DIE
@@ -577,6 +615,15 @@ def handle_zalo_user_message(
     # =========================================================================
     # LỆNH 1.4.2: XEM VÀ QUẢN LÝ KHO PROXY (LISTPROXY / CLEARPROXY)
     # =========================================================================
+    if first_word in ["LISTPROXY", "CLEARPROXY"]:
+        is_admin = is_admin_user(zalo_user_id) or (sender_id and is_admin_user(sender_id))
+        if not is_admin and not is_feature_active(db, "PROXY"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng KHO PROXY hiện đang tạm dừng để bảo trì. Vui lòng quay lại sau!"
+            )
+            return
+
     if first_word == "LISTPROXY":
         send_chat_action(zalo_user_id, "typing")
         from .user_proxy_service import get_user_proxy_stats
@@ -623,6 +670,13 @@ def handle_zalo_user_message(
     # LỆNH 2: ĐẶT MUA SẢN PHẨM (BUY <Mã> [SL] hoặc gõ số [Mã])
     # =========================================================================
     if first_word == "BUY" or is_quick_buy_number:
+        if not is_feature_active(db, "BUY"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng ĐẶT MUA DỊCH VỤ hiện đang tạm dừng để bảo trì / kiểm kê kho.\n"
+                "👉 Vui lòng quay lại sau hoặc liên hệ Admin để được hỗ trợ!"
+            )
+            return
         send_chat_action(zalo_user_id, "typing")
 
         if is_quick_buy_number:
@@ -633,8 +687,9 @@ def handle_zalo_user_message(
                 send_zalo_message(
                     zalo_user_id,
                     "⚠️ 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐌𝐔𝐀 𝐇À𝐍𝐆 𝐒𝐈Ê𝐔 𝐓Ố𝐂:\n\n"
-                    "👉 Mua 1 cái: Gõ số [Mã] (Ví dụ: 1 hoặc 6)\n"
-                    "👉 Mua nhiều cái: BUY <Mã> <Số lượng> (Ví dụ: BUY 1 2)\n\n"
+                    "👉 Mua bằng ví (An toàn): BUY <Mã> (Ví dụ: BUY 1)\n"
+                    "👉 Mua nhiều cái: BUY <Mã> <Số lượng> (Ví dụ: BUY 1 2)\n"
+                    "👉 Lấy QR chuyển khoản: Gõ số [Mã] (Ví dụ: 1 hoặc 6)\n\n"
                     "💡 Nhắn 'MENU' để xem danh sách mã sản phẩm!"
                 )
                 return
@@ -658,9 +713,21 @@ def handle_zalo_user_message(
                     quantity = 1
 
         # Tìm sản phẩm trong DB
-        product = db.query(Product).filter(Product.id == product_id, Product.status == "active").first()
+        product = db.query(Product).filter(Product.id == product_id).first()
         if not product:
             send_zalo_message(zalo_user_id, f"❌ Không tìm thấy sản phẩm mã [{product_id}]. Nhắn 'MENU' để xem danh sách nhé!")
+            return
+
+        # Kiểm tra nếu dịch vụ đang bị Admin tạm dừng
+        if product.status != "active":
+            send_zalo_message(
+                zalo_user_id,
+                f"⛔ DỊCH VỤ ĐANG TẠM DỪNG PHỤC VỤ!\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📦 Dịch vụ: [{product.id}] {product.product_name}\n"
+                f"⚠️ Trạng thái: 🔴 Tạm dừng nhận đơn để bảo trì/nâng cấp.\n\n"
+                f"👉 Vui lòng chọn dịch vụ khác trong 'MENU' hoặc quay lại sau nhé! ✨"
+            )
             return
 
         # Kiểm tra tồn kho (Drive, Thuê SIM OTP & Highlands luôn sẵn hàng 24/7, không cần kiểm kho cứng)
@@ -702,20 +769,38 @@ def handle_zalo_user_message(
         # Kiểm tra nếu khách có đủ số dư ví (Balance) để thanh toán ngay
         user_balance = float(user.balance or 0.0) if user else 0.0
         if user and user_balance >= float(total_price):
-            user.balance = user_balance - float(total_price)
-            db.commit()
+            # 🛡️ CƠ CHẾ BẢO VỆ VÍ: TRÁNH TRƯỜNG HỢP VÍ CÒN DƯ TIỀN (VD: 10K) VÀ LỠ GÕ NHẦM 1
+            # Nếu người dùng CHỈ GÕ SỐ ĐƠN LẺ (is_quick_buy_number) -> TUYỆT ĐỐI KHÔNG TỰ ĐỘNG TRỪ VÍ!
+            if is_quick_buy_number:
+                wallet_guard_msg = (
+                    f"🛡️ ［CẢNH BÁO BẢO VỆ VÍ - TRÁNH BẤM NHẦM］\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📦 Dịch vụ: [{product.id}] {product.product_name}\n"
+                    f"💰 Giá thanh toán: {int(total_price):,} VNĐ\n"
+                    f"💼 Số dư ví của bạn: {int(user_balance):,} VNĐ (Đủ thanh toán)\n\n"
+                    f"⚠️ Bạn vừa chỉ gõ phím số '{parts[0]}'. Nhằm bảo vệ số dư ví và tránh bị trừ tiền oan do lỡ gõ nhầm:\n"
+                    f"👉 Để xác nhận DÙNG VÍ mua dịch vụ này, vui lòng soạn rõ cú pháp:\n"
+                    f"   BUY {product.id}\n\n"
+                    f"💡 Hoặc nếu bạn muốn chuyển khoản ngân hàng SePay:\n"
+                    f"   Quét mã QR được gửi bên dưới nhé! 👇"
+                )
+                send_zalo_message(zalo_user_id, wallet_guard_msg)
+            else:
+                # Khách gõ rõ ràng lệnh BUY <Mã> -> Xác nhận có chủ đích thanh toán bằng ví
+                user.balance = user_balance - float(total_price)
+                db.commit()
 
-            send_zalo_message(
-                zalo_user_id,
-                f"💳 TỰ ĐỘNG TRỪ SỐ DƯ VÍ THÀNH CÔNG! [Đơn #{order_code}]\n\n"
-                f"💰 Số tiền: -{int(total_price):,} VNĐ\n"
-                f"💼 Số dư ví còn lại: {int(user.balance):,} VNĐ\n\n"
-                f"🚀 Đang tiến hành cấp dịch vụ ngay tức thì..."
-            )
+                send_zalo_message(
+                    zalo_user_id,
+                    f"💳 TỰ ĐỘNG TRỪ SỐ DƯ VÍ THÀNH CÔNG! [Đơn #{order_code}]\n\n"
+                    f"💰 Số tiền: -{int(total_price):,} VNĐ\n"
+                    f"💼 Số dư ví còn lại: {int(user.balance):,} VNĐ\n\n"
+                    f"🚀 Đang tiến hành cấp dịch vụ ngay tức thì..."
+                )
 
-            from .sepay_service import fulfill_order
-            fulfill_order(db, new_order, transfer_amount=total_price)
-            return
+                from .sepay_service import fulfill_order
+                fulfill_order(db, new_order, transfer_amount=total_price)
+                return
 
         # Nếu không đủ tiền trong ví -> Tạo mã QR SePay tự động
         qr_url = generate_sepay_qr_url(amount=total_price, order_code=order_code)
@@ -759,6 +844,12 @@ def handle_zalo_user_message(
     # LỆNH 3: XEM DANH SÁCH TÀI KHOẢN ĐÃ MUA (DONHANG)
     # =========================================================================
     if first_word == "DONHANG":
+        if not is_feature_active(db, "DONHANG"):
+            send_zalo_message(
+                zalo_user_id,
+                "⚠️ Tính năng TRA CỨU ĐƠN HÀNG hiện đang tạm dừng để bảo trì. Vui lòng liên hệ Admin để được hỗ trợ!"
+            )
+            return
         send_chat_action(zalo_user_id, "typing")
         if not user:
             send_zalo_message(zalo_user_id, "⚠️ Không tìm thấy thông tin tài khoản của bạn.")
@@ -770,11 +861,12 @@ def handle_zalo_user_message(
             ProductStock.status == "sold"
         ).order_by(ProductStock.id.desc()).limit(10).all()
 
-        # Lấy thêm các đơn hàng số đã hoàn thành (Highlands, SIM OTP, Drive...)
+        # Lấy thêm các đơn hàng dịch vụ số đã hoàn thành (Highlands, SIM OTP, Drive...)
         digital_orders = db.query(Order).filter(
             Order.user_id == user.id,
             Order.status == "completed",
-            Order.account_delivered.isnot(None)
+            Order.account_delivered.isnot(None),
+            Order.product_id.in_([3, 5, 6, 7])
         ).order_by(Order.id.desc()).limit(5).all()
 
         if not purchased_stocks and not digital_orders:

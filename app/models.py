@@ -302,3 +302,17 @@ class UserProxy(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="proxies")
+
+
+class SystemSetting(Base):
+    """
+    Bảng cấu hình hệ thống & Trạng thái bật/tắt tính năng (Feature Toggles).
+    Quản lý trạng thái động của các tính năng (active, paused) và cấu hình runtime.
+    """
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(50), unique=True, index=True, nullable=False)
+    value = Column(String(255), default="active", nullable=False)
+    description = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
