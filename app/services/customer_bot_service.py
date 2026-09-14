@@ -99,8 +99,10 @@ def clean_zalo_message_text(raw_text: str) -> str:
 
 
 def format_price_tag(amount: Union[Decimal, float, int]) -> str:
-    """Format giá tiền theo phong cách Gen Z ngắn gọn (ví dụ 7,000 -> 7k, 60,000 -> 60k)."""
-    val = int(amount)
+    """Format giá tiền theo phong cách Gen Z ngắn gọn (ví dụ 7,000 -> 7k, 60,000 -> 60k, 0 -> 0 đ)."""
+    val = int(amount or 0)
+    if val <= 0:
+        return "0 đ"
     if val >= 1000 and val % 1000 == 0:
         return f"{val // 1000:,}k"
     return f"{val:,}đ"
@@ -123,15 +125,19 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
         ICONS = {1: "💎", 2: "🎬", 3: "🤖", 4: "🎨", 5: "📚", 6: "📱", 7: "☕"}
         for p in products:
             p_name_lower = p.product_name.lower()
-            if "nạp tiền" in p_name_lower or "nap tien" in p_name_lower or p.id == 8 or float(p.price or 0.0) <= 0:
+            if "nạp tiền" in p_name_lower or "nap tien" in p_name_lower or p.id == 8:
                 continue
 
-            if p.status != "active":
-                stock_tag = "🔴 Tạm dừng phục vụ (Bảo trì)"
-            elif p.id in [3, 5] or "drive" in p_name_lower:
-                stock_tag = "🟢 Sẵn hàng 24/7"
-            elif p.id == 6 or "thuê sim" in p_name_lower or "otp" in p_name_lower:
-                stock_tag = "🟢 Sẵn sàng (Cấp số tự động 24/7)"
+            is_course = (p.id == 5) or ("khóa học" in p_name_lower) or ("khoa hoc" in p_name_lower)
+
+            # Ưu tiên lấy trạng thái từ Database: nếu cột status != 'active' (paused, maintenance, inactive...) thì bảo trì
+            p_status = getattr(p, "status", "active")
+            if p_status != "active":
+                stock_tag = "🔴 Đang bảo trì 🛠️"
+            elif p.id in [2, 3, 4]:
+                stock_tag = "🟢 Sẵn sàng 24/7"
+            elif is_course:
+                stock_tag = "🟢 Sẵn sàng 24/7"
             elif p.id == 7 or "highlands" in p_name_lower:
                 stock_tag = "🟢 Sẵn sàng (Cấp OTP tự động)"
             else:
@@ -141,7 +147,11 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
                 ).count()
                 stock_tag = f"🟢 Sẵn {stock} acc" if stock > 0 else "🔴 Tạm hết"
 
-            price_tag = format_price_tag(p.price)
+            if is_course or float(p.price or 0.0) <= 0:
+                price_tag = "0 đ"
+            else:
+                price_tag = format_price_tag(p.price)
+
             ico = ICONS.get(p.id, "📦")
             lines.append(f"{ico} [{p.id}] {p.product_name} ➔ {price_tag}")
             lines.append(f"    └ {stock_tag}\n")
@@ -718,21 +728,47 @@ def handle_zalo_user_message(
             send_zalo_message(zalo_user_id, f"❌ Không tìm thấy sản phẩm mã [{product_id}]. Nhắn 'MENU' để xem danh sách nhé!")
             return
 
-        # Kiểm tra nếu dịch vụ đang bị Admin tạm dừng / bảo trì
-        if product.status != "active":
+        # Kiểm tra nếu dịch vụ đang bị Admin tạm dừng / bảo trì (lấy từ database)
+        if getattr(product, "status", "active") != "active":
             send_zalo_message(
                 zalo_user_id,
                 f"🛠️ DỊCH VỤ ĐANG TẠM DỪNG BẢO TRÌ!\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"📦 Dịch vụ: [{product.id}] {product.product_name}\n"
-                f"🔧 Trạng thái: 🔴 Tạm ngưng nhận đơn để bảo trì/nâng cấp.\n\n"
-                f"👉 Bạn vui lòng quay lại sau ít phút hoặc nhắn 'MENU' để chọn dịch vụ khác nhé! ✨"
+                f"🔧 Trạng thái: 🔴 Đang bảo trì 🛠️\n\n"
+                f"👉 Dịch vụ hiện đang bảo trì, vui lòng quay lại sau ít phút hoặc nhắn 'MENU' để chọn dịch vụ khác nhé! ✨"
             )
             return
 
-        # Kiểm tra tồn kho (Drive, Thuê SIM OTP & Highlands luôn sẵn hàng 24/7, không cần kiểm kho cứng)
         prod_lower = product.product_name.lower()
-        is_unlimited = (product.id in [3, 5, 6, 7]) or ("drive" in prod_lower) or ("thuê sim" in prod_lower) or ("otp" in prod_lower) or ("highlands" in prod_lower)
+        is_course = (product.id == 5) or ("khóa học" in prod_lower) or ("khoa hoc" in prod_lower)
+
+        # ĐỐI VỚI CÁC MẶT HÀNG LÀ KHÓA HỌC: HIỂN THỊ DESCRIPTION TRỰC TIẾP
+        if is_course or float(product.price or 0.0) <= 0:
+            desc_content = product.description or "Hiện chưa có thông tin chi tiết cho khóa học này. Vui lòng liên hệ Admin để được hỗ trợ!"
+            course_msg = (
+                f"📚 𝗧𝗛Ô𝗡𝗚 𝗧𝗜𝗡 𝗞𝗛Ó𝗔 𝗛Ọ𝗖: {product.product_name} 🎓\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Giá: 0 đ (Miễn phí 100%)\n"
+                f"🟢 Trạng thái: Sẵn sàng 24/7\n\n"
+                f"📖 𝗡Ộ𝗜 𝗗𝗨𝗡𝗚 & 𝗧À𝗜 𝗟𝗜Ệ𝗨:\n"
+                f"{desc_content}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✨ Chúc bạn học tập hiệu quả và áp dụng thành công!"
+            )
+            send_zalo_message(zalo_user_id, course_msg)
+            return
+
+        # Kiểm tra tồn kho (SP 2, 3, 4, 5, 6, 7 luôn sẵn sàng 24/7, không cần kiểm kho cứng)
+        is_unlimited = (
+            (product.id in [2, 3, 4, 5, 6, 7])
+            or ("drive" in prod_lower)
+            or ("thuê sim" in prod_lower)
+            or ("otp" in prod_lower)
+            or ("highlands" in prod_lower)
+            or ("netflix" in prod_lower)
+            or ("capcut" in prod_lower)
+        )
 
         if not is_unlimited:
             available_stock = db.query(ProductStock).filter(
