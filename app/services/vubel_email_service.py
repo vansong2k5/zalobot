@@ -234,7 +234,18 @@ def add_email_to_shopee_account(
             else:
                 payload["mode"] = "random"
 
-            res = call_shopee_core_api("/v1/shopee/addmail", method="POST", json_data=payload)
+            # Thử tối đa 3 lần nếu máy chủ đang bận xử lý tiến trình proxy khác
+            res = {}
+            for attempt in range(3):
+                res = call_shopee_core_api("/v1/shopee/addmail", method="POST", json_data=payload)
+                err_code = str(res.get("error") or "")
+                if err_code in ["proxy_task_in_progress", "rate_limit_exceeded"] or "still running" in str(res.get("message") or ""):
+                    logger.warning("Vubel báo proxy_task_in_progress (lần %s/3). Đợi 3s thử lại...", attempt + 1)
+                    import time
+                    time.sleep(3)
+                    continue
+                break
+
             err_text = str(res.get("error") or res.get("message") or "")
 
             # Nếu proxy bị lỗi kết nối 502 / refused / timeout
@@ -264,7 +275,7 @@ def add_email_to_shopee_account(
                     "raw": res
                 }
 
-            if is_ok or (assigned_email and "lỗi" not in err_text.lower() and "thất bại" not in err_text.lower()):
+            if is_ok or (assigned_email and "lỗi" not in err_text.lower() and "thất bại" not in err_text.lower() and "hết hạn" not in err_text.lower()):
                 stock.assigned_email = assigned_email
                 if email_pass:
                     stock.email_password = email_pass
@@ -281,8 +292,8 @@ def add_email_to_shopee_account(
                 }
 
             # Nếu lỗi phiên đăng nhập hết hạn -> xóa active_spc_st để login lại ở bước sau
-            if "login" in err_text.lower() or "unauthorized" in err_text.lower() or "phiên" in err_text.lower() or "cookie" in err_text.lower():
-                logger.info("Cookie SPC_ST của Stock #%s đã hết hạn, chuyển sang đăng nhập lại...", stock.id)
+            if "login" in err_text.lower() or "unauthorized" in err_text.lower() or "phiên" in err_text.lower() or "cookie" in err_text.lower() or "hết hạn" in err_text.lower():
+                logger.info("Cookie SPC_ST của Stock #%s đã hết hạn (%s), chuyển sang đăng nhập lại...", stock.id, err_text)
                 active_spc_st = ""
 
         # -------------------------------------------------------------
@@ -326,6 +337,13 @@ def add_email_to_shopee_account(
                     last_error_msg = "Proxy kết nối Shopee bị gián đoạn (502 / Timed out). Đang thử tuyến proxy khác..."
                     continue
 
+                if "login_challenge_required" in login_err or "otp" in login_err.lower() or "captcha" in login_err.lower():
+                    last_error_msg = (
+                        "Shopee yêu cầu xác minh Captcha/OTP trên thiết bị lạ.\n"
+                        f"👉 Bạn hãy mở Shopee đăng nhập bằng nick: {username} và soạn: XACMINH {stock.id} (Bot sẽ duyệt tự động)!"
+                    )
+                    break
+
         # -------------------------------------------------------------
         # BƯỚC 3: GỌI LỆNH GÁN EMAIL VỚI THÔNG TIN VỪA CÓ
         # -------------------------------------------------------------
@@ -339,9 +357,18 @@ def add_email_to_shopee_account(
         else:
             payload["mode"] = "random"
 
-        res = call_shopee_core_api("/v1/shopee/addmail", method="POST", json_data=payload)
-        last_res = res
+        res = {}
+        for attempt in range(3):
+            res = call_shopee_core_api("/v1/shopee/addmail", method="POST", json_data=payload)
+            err_code = str(res.get("error") or "")
+            if err_code in ["proxy_task_in_progress", "rate_limit_exceeded"] or "still running" in str(res.get("message") or ""):
+                logger.warning("Vubel addmail báo proxy_task_in_progress bước 3 (lần %s/3). Đợi 3s...", attempt + 1)
+                import time
+                time.sleep(3)
+                continue
+            break
 
+        last_res = res
         err_text = str(res.get("error") or res.get("message") or "")
         data = res.get("data") or {}
         assigned_email = data.get("email") or custom_email or res.get("email")
@@ -363,7 +390,7 @@ def add_email_to_shopee_account(
                 "raw": res
             }
 
-        if is_ok or (assigned_email and "lỗi" not in err_text.lower() and "thất bại" not in err_text.lower()):
+        if is_ok or (assigned_email and "lỗi" not in err_text.lower() and "thất bại" not in err_text.lower() and "hết hạn" not in err_text.lower()):
             stock.assigned_email = assigned_email
             if email_pass:
                 stock.email_password = email_pass
@@ -384,13 +411,20 @@ def add_email_to_shopee_account(
             logger.warning("Lệnh addmail qua proxy %s thất bại (502). Chuyển sang proxy kế tiếp...", used_proxy)
             last_error_msg = "Proxy kết nối Shopee bị gián đoạn (502 / Timed out). Đang thử tuyến proxy khác..."
             continue
+        elif "proxy_task_in_progress" in err_text or "still running" in err_text:
+            logger.warning("Máy chủ Vubel báo bận trên proxy %s. Thử proxy kế tiếp...", used_proxy)
+            last_error_msg = "Máy chủ gán email đang bận xử lý tiến trình khác. Vui lòng đợi vài giây và thử lại!"
+            continue
         else:
-            last_error_msg = err_text or "Không thể gán email vào Shopee lúc này. Vui lòng thử lại sau ít phút!"
+            if "hết hạn" in err_text.lower() or "cookie" in err_text.lower():
+                last_error_msg = f"Cookie phiên đăng nhập của nick đã hết hạn. Bạn hãy đăng nhập Shopee bằng nick & mật khẩu được cấp, rồi soạn 'XACMINH {stock.id}' để duyệt đăng nhập nhé!"
+            else:
+                last_error_msg = err_text or "Không thể gán email vào Shopee lúc này. Vui lòng thử lại sau ít phút!"
             break
 
     # Nếu chạy hết danh sách proxy mà vẫn lỗi 502/timeout
     if "502" in last_error_msg or "timed out" in last_error_msg.lower() or "gián đoạn" in last_error_msg:
-        last_error_msg = "Proxy kết nối Shopee hiện tại không phản hồi (502 / Hết hạn kết nối). Vui lòng cập nhật Proxy sống mới trong cấu hình hệ thống!"
+        last_error_msg = "Đường truyền Proxy Shopee hiện tại không phản hồi. Vui lòng nạp Proxy mới hoặc thử lại sau ít phút!"
 
     return {"ok": False, "error": last_error_msg, "raw": last_res}
 
