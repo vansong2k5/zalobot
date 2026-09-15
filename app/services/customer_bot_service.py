@@ -62,18 +62,22 @@ COMMAND_KEYWORDS = {
 
 def clean_zalo_message_text(raw_text: str) -> str:
     """
-    Chuẩn hóa nội dung tin nhắn Zalo, tách triệt để mention tag bot trong nhóm.
-    Hỗ trợ chuẩn xác:
-    - '@Bot Shopee VIP Deal BUY 1' -> 'BUY 1'
-    - '@Bot Shopee VIP Deal 1' -> '1'
-    - '@Bot Shopee VIP Deal' -> 'MENU'
-    - '@Bot Shopee VIP Deal MENU' -> 'MENU'
-    - '@Bot Shopee VIP Deal DONHANG' -> 'DONHANG'
+    Chuẩn hóa nội dung tin nhắn Zalo, bóc tách mention tag bot trong nhóm.
+    - '@Bot BUY 1' -> 'BUY 1'
+    - '@Bot' -> 'MENU'
+    - '@Bot MENU' -> 'MENU'
     - 'BUY 1' -> 'BUY 1'
+    - 'BUY1' -> 'BUY 1'
     """
     if not raw_text:
         return ""
     text = raw_text.replace("\xa0", " ").strip()
+
+    # Chuẩn hóa nếu khách gõ dính phím như BUY6, BUY1, BUY7 -> BUY 6
+    match_buy = re.match(r"^BUY(\d+)$", text.upper())
+    if match_buy:
+        return f"BUY {match_buy.group(1)}"
+
     if not text.startswith("@"):
         return text
 
@@ -81,21 +85,30 @@ def clean_zalo_message_text(raw_text: str) -> str:
     command_idx = -1
     for i, tok in enumerate(tokens):
         cleaned_tok = tok.upper().strip(":/.,!?#")
-        if cleaned_tok in COMMAND_KEYWORDS or cleaned_tok.isdigit() or extract_phone_number(tok):
+        if cleaned_tok in COMMAND_KEYWORDS or extract_phone_number(tok):
             command_idx = i
             break
 
     if command_idx != -1:
         text = " ".join(tokens[command_idx:]).strip()
     else:
-        text = "MENU"
+        # Nếu chỉ có mention tag '@Bot' duy nhất -> trả về MENU
+        # Nếu có từ ngữ khác trong nhóm mà không phải command -> giữ nguyên để không tự tiện ép thành MENU
+        remaining = []
+        skip = True
+        for tok in tokens:
+            if skip and tok.startswith("@"):
+                continue
+            skip = False
+            remaining.append(tok)
+        text = " ".join(remaining).strip() if remaining else "MENU"
 
-    # Chuẩn hóa nếu khách gõ dính phím như BUY6, BUY1, BUY7 -> BUY 6
     match_buy = re.match(r"^BUY(\d+)$", text.upper())
     if match_buy:
         text = f"BUY {match_buy.group(1)}"
 
     return text
+
 
 
 def format_price_tag(amount: Union[Decimal, float, int]) -> str:
@@ -354,23 +367,20 @@ def handle_zalo_user_message(
     # =========================================================================
     # LỆNH 1.2: NẠP TIỀN VÀO VÍ (TẠM ĐÓNG CỔNG TỰ ĐỘNG)
     # =========================================================================
-    if first_word in ["NAP", "NAPTIEN", "NẠP"]:
+    if first_word == "NAP":
         send_chat_action(zalo_user_id, "typing")
         send_zalo_message(
             zalo_user_id,
             "⚠️ CỔNG NẠP TIỀN TỰ ĐỘNG TẠM ĐÓNG!\n"
             "📌 Đang bảo trì nâng cấp, vui lòng liên hệ Admin để được cộng số dư.\n"
-            "💡 Vẫn có thể mua từng đơn qua QR: BUY <mã> hoặc gõ số mã (vd: 1)."
+            "💡 Mua hàng vui lòng soạn: BUY <mã> [số lượng] (Ví dụ: BUY 1)."
         )
         return
 
     # =========================================================================
-    # LỆNH 1.2: TRA CỨU & NHẬN MÃ OTP TỨC THÌ (OTP / LAY OTP / CHECK OTP)
+    # LỆNH 1.2: TRA CỨU & NHẬN MÃ OTP TỨC THÌ (OTP)
     # =========================================================================
-    raw_text_clean = re.sub(r"\s+", " ", text.upper().strip())
-    if first_word in ["OTP", "LAYOTP", "CHECKOTP", "MAOTP"] or raw_text_clean in [
-        "OTP", "LAY OTP", "LẤY OTP", "MÃ OTP", "MA OTP", "CHECK OTP", "XEM OTP", "XEMOTP", "XIN OTP", "XIN MA"
-    ]:
+    if first_word == "OTP":
         if not is_feature_active(db, "OTP"):
             send_zalo_message(
                 zalo_user_id,
@@ -1081,31 +1091,6 @@ def handle_zalo_user_message(
 
         return
 
-    # =========================================================================
-    # LỆNH 5: HƯỚNG DẪN CHUYỂN ĐỔI KHI KHÁCH HỎI MAIL / DUYỆT ĐĂNG NHẬP
-    # =========================================================================
-    if first_word in ["GETOTP", "DOCMAIL", "MAIL", "CHECKMAIL"]:
-        send_chat_action(zalo_user_id, "typing")
-        target_tk = parts[1] if len(parts) >= 2 else ""
-        if not target_tk and user:
-            latest_s = db.query(ProductStock).join(Order).filter(
-                Order.user_id == user.id,
-                ProductStock.status == "sold"
-            ).order_by(ProductStock.id.desc()).first()
-            if latest_s:
-                target_tk = str(latest_s.id)
-
-        target_display = target_tk or "<Mã TK>"
-        otp_redirect_msg = [
-            f"💡 HƯỚNG DẪN XÁC MINH ĐĂNG NHẬP [#{target_display}]:\n",
-            "Shopee hiện tại duyệt thiết bị mới trực tiếp qua Email an toàn:",
-            "1️⃣ Đăng nhập nick vào Shopee bằng Nick & Pass được cấp.",
-            "2️⃣ Khi Shopee yêu cầu xác minh ➔ Bấm chọn 'Xác minh qua Email'.",
-            f"3️⃣ Sau đó quay lại đây soạn tin: XACMINH {target_display}\n",
-            "🚀 Bot sẽ tự động duyệt đăng nhập thiết bị mới ngay tức thì, không cần nhập OTP thủ công! ✨"
-        ]
-        send_zalo_message(zalo_user_id, "\n".join(otp_redirect_msg))
-        return
 
     # =========================================================================
     # LỆNH 6: XÁC MINH ĐĂNG NHẬP / DUYỆT THIẾT BỊ SHOPEE (XACMINH <Mã TK>)
@@ -1205,7 +1190,7 @@ def handle_zalo_user_message(
     # =========================================================================
     # LỆNH 8: HƯỚNG DẪN TỔNG HỢP (HELP)
     # =========================================================================
-    if first_word in ["HELP", "?"]:
+    if first_word == "HELP":
         send_chat_action(zalo_user_id, "typing")
         help_lines = [
             "📖 HƯỚNG DẪN SỬ DỤNG BOT 24/7\n",
@@ -1232,9 +1217,14 @@ def handle_zalo_user_message(
         return
 
     # =========================================================================
-    # MẶC ĐỊNH: HIỂN THỊ MENU GEN Z BẮT MẮT
+    # MẶC ĐỊNH:
+    # - Nếu trong nhóm (Group): Không khớp lệnh thì im lặng tuyệt đối, tránh spam làm phiền nhóm
+    # - Nếu trong chat riêng 1-1: Hiển thị Menu sản phẩm
     # =========================================================================
+    if is_group_chat:
+        return
+
     send_chat_action(zalo_user_id, "typing")
-    target_name = (display_name or (user.display_name if user else "")) if not is_group_chat else ""
+    target_name = (display_name or (user.display_name if user else ""))
     menu_text = render_product_menu_text(db, target_name)
     send_zalo_message(zalo_user_id, menu_text)
