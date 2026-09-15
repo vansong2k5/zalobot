@@ -157,15 +157,13 @@ def render_product_menu_text(db: Session, target_name: str = "") -> str:
             lines.append(f"    └ {stock_tag}\n")
 
     lines.extend([
-        "⚡ 𝐋Ố𝐈 𝐓Ắ𝐂 𝐌𝐔𝐀 𝐒𝐈Ê𝐔 𝐓Ố𝐂:",
-        "👉 Nạp tiền vào ví: Nhắn NAP (Tối thiểu 10k)",
-        "👉 Mua bằng số dư ví: BUY <Mã> (Ví dụ: BUY 1 - An toàn, tránh bấm nhầm)",
-        "👉 Lấy QR chuyển khoản: Nhắn số [Mã] (Ví dụ: 1 hoặc 6)",
-        "👉 Mua nhiều cái: BUY <Mã> <SL> (Ví dụ: BUY 1 2)",
-        "👉 Check SĐT Shopee: CHECKSDT <SĐT> (hoặc gửi SĐT)",
-        "👉 Lấy mã OTP: Nhắn OTP",
+        "⚡ 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐌𝐔𝐀 𝐇À𝐍𝐆:",
+        "👉 Mua hàng: Soạn BUY <Mã> (Ví dụ: BUY 1)",
+        "👉 Mua nhiều cái: BUY <Mã> <Số lượng> (Ví dụ: BUY 1 2)",
         "👉 Xem số dư ví: Nhắn SODU",
         "👉 Lấy nick đã mua: Nhắn DONHANG",
+        "👉 Lấy mã OTP: Nhắn OTP",
+        "👉 Check SĐT: CHECKSDT <SĐT>",
         "👉 Tra cứu SPX: CO <Mã vận đơn>",
         "👉 Hướng dẫn từ A-Z: Nhắn HELP",
     ])
@@ -309,16 +307,6 @@ def handle_zalo_user_message(
             "✅ Nhóm Zalo này đã được kết nối tự động thành công! 🎉"
         )
         return
-
-    # Khách gõ nhanh 1 con số (ví dụ: '1') để mua sản phẩm mã 1 (tối đa 3 chữ số, không phải SĐT)
-    # Kiểm tra tính năng QUICK_BUY: nếu admin dừng tính năng QUICK_BUY thì bỏ qua việc nhận diện số trần trụi
-    is_quick_buy_number = (
-        is_feature_active(db, "QUICK_BUY")
-        and len(parts) == 1
-        and parts[0].isdigit()
-        and len(parts[0]) <= 3
-        and not extract_phone_number(parts[0])
-    )
 
     # =========================================================================
     # LỆNH 1: XEM MENU SẢN PHẨM (MENU)
@@ -510,7 +498,7 @@ def handle_zalo_user_message(
                 "✨ Kiểm tra đầu số sạch, đã đăng ký hay có thể back số!"
             )
             return
-    elif first_word not in COMMAND_KEYWORDS and not is_quick_buy_number:
+    elif first_word not in COMMAND_KEYWORDS:
         if is_feature_active(db, "CHECKSDT"):
             phone_to_check = extract_phone_number(text)
 
@@ -677,9 +665,9 @@ def handle_zalo_user_message(
         return
 
     # =========================================================================
-    # LỆNH 2: ĐẶT MUA SẢN PHẨM (BUY <Mã> [SL] hoặc gõ số [Mã])
+    # LỆNH 2: ĐẶT MUA SẢN PHẨM (BẮT BUỘC DÙNG LỆNH: BUY <Mã> [Số lượng])
     # =========================================================================
-    if first_word == "BUY" or is_quick_buy_number:
+    if first_word == "BUY":
         if not is_feature_active(db, "BUY"):
             send_zalo_message(
                 zalo_user_id,
@@ -689,38 +677,33 @@ def handle_zalo_user_message(
             return
         send_chat_action(zalo_user_id, "typing")
 
-        if is_quick_buy_number:
-            product_id = int(parts[0])
-            quantity = 1
-        else:
-            if len(parts) < 2:
-                send_zalo_message(
-                    zalo_user_id,
-                    "⚠️ 𝐇ƯỚ𝐍𝐆 𝐃Ẫ𝐍 𝐌𝐔𝐀 𝐇À𝐍𝐆 𝐒𝐈Ê𝐔 𝐓Ố𝐂:\n\n"
-                    "👉 Mua bằng ví (An toàn): BUY <Mã> (Ví dụ: BUY 1)\n"
-                    "👉 Mua nhiều cái: BUY <Mã> <Số lượng> (Ví dụ: BUY 1 2)\n"
-                    "👉 Lấy QR chuyển khoản: Gõ số [Mã] (Ví dụ: 1 hoặc 6)\n\n"
-                    "💡 Nhắn 'MENU' để xem danh sách mã sản phẩm!"
-                )
-                return
+        if len(parts) < 2:
+            send_zalo_message(
+                zalo_user_id,
+                "💡 𝐂Ú 𝐏𝐇Á𝐏 ĐẶ𝐓 𝐌𝐔𝐀:\n\n"
+                "👉 Mua 1 tài khoản: BUY <Mã> (Ví dụ: BUY 1)\n"
+                "👉 Mua nhiều tài khoản: BUY <Mã> <Số lượng> (Ví dụ: BUY 1 2)\n\n"
+                "📌 Nhắn 'MENU' để xem danh sách dịch vụ sẵn hàng nhé! ✨"
+            )
+            return
 
+        try:
+            product_id = int(parts[1])
+        except ValueError:
+            send_zalo_message(zalo_user_id, "⚠️ Mã sản phẩm phải là số. Ví dụ: BUY 1 hoặc BUY 2")
+            return
+
+        quantity = 1
+        if len(parts) >= 3:
             try:
-                product_id = int(parts[1])
-            except ValueError:
-                send_zalo_message(zalo_user_id, "⚠️ Mã sản phẩm phải là số. Ví dụ soạn: BUY 1")
-                return
-
-            quantity = 1
-            if len(parts) >= 3:
-                try:
-                    quantity = int(parts[2])
-                    if quantity <= 0:
-                        quantity = 1
-                    if quantity > 10:
-                        send_zalo_message(zalo_user_id, "⚠️ Mỗi lần mua tối đa 10 tài khoản bạn nhé!")
-                        return
-                except ValueError:
+                quantity = int(parts[2])
+                if quantity <= 0:
                     quantity = 1
+                if quantity > 10:
+                    send_zalo_message(zalo_user_id, "⚠️ Mỗi lần mua tối đa 10 tài khoản bạn nhé!")
+                    return
+            except ValueError:
+                quantity = 1
 
         # Tìm sản phẩm trong DB
         product = db.query(Product).filter(Product.id == product_id).first()
@@ -794,6 +777,8 @@ def handle_zalo_user_message(
             order_code=order_code,
             user_id=user.id if user else None,
             product_id=product.id,
+            platform="zalo",
+            platform_channel_id=str(zalo_user_id),
             quantity=quantity,
             price=total_price,
             status="pending"
@@ -805,38 +790,21 @@ def handle_zalo_user_message(
         # Kiểm tra nếu khách có đủ số dư ví (Balance) để thanh toán ngay
         user_balance = float(user.balance or 0.0) if user else 0.0
         if user and user_balance >= float(total_price):
-            # 🛡️ CƠ CHẾ BẢO VỆ VÍ: TRÁNH TRƯỜNG HỢP VÍ CÒN DƯ TIỀN (VD: 10K) VÀ LỠ GÕ NHẦM 1
-            # Nếu người dùng CHỈ GÕ SỐ ĐƠN LẺ (is_quick_buy_number) -> TUYỆT ĐỐI KHÔNG TỰ ĐỘNG TRỪ VÍ!
-            if is_quick_buy_number:
-                wallet_guard_msg = (
-                    f"🛡️ ［CẢNH BÁO BẢO VỆ VÍ - TRÁNH BẤM NHẦM］\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📦 Dịch vụ: [{product.id}] {product.product_name}\n"
-                    f"💰 Giá thanh toán: {int(total_price):,} VNĐ\n"
-                    f"💼 Số dư ví của bạn: {int(user_balance):,} VNĐ (Đủ thanh toán)\n\n"
-                    f"⚠️ Bạn vừa chỉ gõ phím số '{parts[0]}'. Nhằm bảo vệ số dư ví và tránh bị trừ tiền oan do lỡ gõ nhầm:\n"
-                    f"👉 Để xác nhận DÙNG VÍ mua dịch vụ này, vui lòng soạn rõ cú pháp:\n"
-                    f"   BUY {product.id}\n\n"
-                    f"💡 Hoặc nếu bạn muốn chuyển khoản ngân hàng SePay:\n"
-                    f"   Quét mã QR được gửi bên dưới nhé! 👇"
-                )
-                send_zalo_message(zalo_user_id, wallet_guard_msg)
-            else:
-                # Khách gõ rõ ràng lệnh BUY <Mã> -> Xác nhận có chủ đích thanh toán bằng ví
-                user.balance = user_balance - float(total_price)
-                db.commit()
+            # Khách đã chủ động dùng lệnh BUY -> Trừ ví ngay lập tức, không cảnh báo bấm nhầm
+            user.balance = user_balance - float(total_price)
+            db.commit()
 
-                send_zalo_message(
-                    zalo_user_id,
-                    f"💳 TỰ ĐỘNG TRỪ SỐ DƯ VÍ THÀNH CÔNG! [Đơn #{order_code}]\n\n"
-                    f"💰 Số tiền: -{int(total_price):,} VNĐ\n"
-                    f"💼 Số dư ví còn lại: {int(user.balance):,} VNĐ\n\n"
-                    f"🚀 Đang tiến hành cấp dịch vụ ngay tức thì..."
-                )
+            send_zalo_message(
+                zalo_user_id,
+                f"💳 TỰ ĐỘNG TRỪ SỐ DƯ VÍ THÀNH CÔNG! [Đơn #{order_code}]\n\n"
+                f"💰 Số tiền: -{int(total_price):,} VNĐ\n"
+                f"💼 Số dư ví còn lại: {int(user.balance):,} VNĐ\n\n"
+                f"🚀 Đang tiến hành cấp dịch vụ ngay tức thì..."
+            )
 
-                from .sepay_service import fulfill_order
-                fulfill_order(db, new_order, transfer_amount=total_price)
-                return
+            from .sepay_service import fulfill_order
+            fulfill_order(db, new_order, transfer_amount=total_price)
+            return
 
         # Nếu không đủ tiền trong ví -> Tạo mã QR SePay tự động
         qr_url = generate_sepay_qr_url(amount=total_price, order_code=order_code)

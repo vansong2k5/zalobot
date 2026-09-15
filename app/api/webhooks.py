@@ -23,6 +23,18 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 # ==============================================================================
 # 1. WEBHOOK SEPAY (CỔNG THANH TOÁN TỰ ĐỘNG - https://my.sepay.vn/webhooks)
 # ==============================================================================
+# 1. WEBHOOK SEPAY (CỔNG THANH TOÁN TỰ ĐỘNG - https://my.sepay.vn/webhooks)
+# ==============================================================================
+
+@router.get("/sepay")
+async def sepay_webhook_health():
+    """Endpoint kiểm tra trạng thái hoạt động của SePay Webhook (tránh lỗi 405 khi SePay test GET)."""
+    return {
+        "status": "active",
+        "service": "sepay_webhook",
+        "message": "SePay Webhook is running and ready to receive POST events."
+    }
+
 
 @router.post("/sepay")
 async def sepay_webhook(
@@ -74,12 +86,13 @@ async def sepay_webhook(
         from decimal import Decimal
         transfer_amount = Decimal("0")
 
-    # 3. Xử lý giao dịch nhận tiền
+    # 3. Xử lý giao dịch nhận tiền (truyền cả data đầy đủ để bóc tách mã đơn linh hoạt)
     result = process_sepay_payment(
         db=db,
         content=content,
         transfer_amount=transfer_amount,
-        transfer_type=transfer_type
+        transfer_type=transfer_type,
+        sepay_data=data
     )
 
     print(f"[SePay Kết Quả Xử Lý] {result}")

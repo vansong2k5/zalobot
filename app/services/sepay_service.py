@@ -5,9 +5,12 @@ Tự động bàn giao tài khoản, thuê số OTP Shopee / Highlands, và xử
 
 import re
 import urllib.parse
+import logging
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("SepayService")
 
 from app.config import (
     SEPAY_BANK,
@@ -332,7 +335,22 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
         f"📌 Quản lý toàn bộ nick đã mua: Nhắn DONHANG\n"
         f"Cảm ơn bạn đã ủng hộ shop! Chúc bạn dùng mượt mà ✨"
     )
-    send_zalo_message(customer_zalo_id, success_msg)
+    sent = send_zalo_message(customer_zalo_id, success_msg)
+    if not sent:
+        logger.warning(f"Lỗi gửi tin nhắn Zalo riêng cho khách {customer_zalo_id} (Đơn #{order_code}). Có thể khách chưa chat riêng 1-1 với Bot.")
+        target_channel = getattr(order, "platform_channel_id", None)
+        if target_channel and str(target_channel).startswith("zgr-"):
+            buyer_tag = f"@{customer.display_name} " if customer else ""
+            group_fallback = (
+                f"🎉 {buyer_tag}ĐƠN HÀNG #{order_code} ĐÃ THANH TOÁN THÀNH CÔNG! 🚀\n\n"
+                f"📦 Dịch vụ: {order.product.product_name}\n"
+                f"💰 Đã thanh toán: {int(order.price):,} VNĐ\n\n"
+                f"⚠️ LƯU Ý BẢO MẬT MẬT KHẨU:\n"
+                f"Do Zalo chặn Bot tự động gửi tin nhắn riêng cho bạn (bạn chưa từng mở chat riêng với Bot):\n"
+                f"👉 Vui lòng BẤM VÀO AVATAR CỦA BOT ➔ BẤM 'NHẮN TIN' ➔ Soạn lệnh: DONHANG\n"
+                f"Hệ thống sẽ lập tức gửi toàn bộ thông tin tài khoản & mật khẩu vào hộp thư riêng của bạn ngay! ✨"
+            )
+            send_zalo_message(target_channel, group_fallback)
 
     from .group_service import notify_groups_order_completed
     notify_groups_order_completed(db, order)
@@ -341,11 +359,17 @@ def fulfill_order(db: Session, order: Order, transfer_amount: Decimal = None) ->
     return {"success": True, "message": f"Đơn hàng #{order_code} hoàn tất và đã gửi tài khoản!"}
 
 
-def process_sepay_payment(db: Session, content: str, transfer_amount: Decimal, transfer_type: str) -> dict:
+def process_sepay_payment(
+    db: Session,
+    content: str,
+    transfer_amount: Decimal,
+    transfer_type: str,
+    sepay_data: dict = None
+) -> dict:
     """
     Xử lý webhook từ SePay:
     1. Chỉ xử lý giao dịch nhận tiền (transferType == 'in')
-    2. Quét nội dung chuyển khoản tìm mã đơn DHxxxxxx
+    2. Quét nội dung chuyển khoản tìm mã đơn DHxxxxxx (hỗ trợ code, content, description, referenceCode, có/không khoảng trắng)
     3. Tìm đơn hàng tương ứng
     4. Xử lý trường hợp khách CHUYỂN KHOẢN 2 LẦN (chuyển đúp / chuyển thừa):
        - Tự động nạp tiền vào Số dư ví của khách và báo tin nhắn Zalo tức thì!
@@ -356,17 +380,42 @@ def process_sepay_payment(db: Session, content: str, transfer_amount: Decimal, t
     if transfer_type.lower() != "in":
         return {"success": True, "message": "Bỏ qua giao dịch chuyển tiền đi (out)"}
 
-    # 2. Tìm mã đơn hàng DHxxxxxx trong nội dung chuyển khoản
-    match = re.search(r"DH\d{6}", content.upper())
-    if not match:
-        return {"success": True, "message": "Nội dung chuyển khoản không chứa mã đơn DHxxxxxx"}
+    sepay_data = sepay_data or {}
+    code_field = str(sepay_data.get("code") or "")
+    desc_field = str(sepay_data.get("description") or "")
+    ref_field = str(sepay_data.get("referenceCode") or "")
 
-    order_code = match.group(0)
+    # Gom toàn bộ dữ liệu tìm kiếm
+    search_text = f"{code_field} {content} {desc_field} {ref_field}".upper().strip()
 
-    # 3. Tìm đơn hàng
-    order = db.query(Order).filter(Order.order_code == order_code).first()
+    order = None
+    order_code = None
+
+    # Cách 1: Bắt chuẩn DH kèm 6 số (chấp nhận khoảng trắng, dấu gạch ngang, chấm)
+    # Ví dụ: DH640576, DH 640576, DH-640576, DH_640576
+    match = re.search(r"DH\s*[-_.]?\s*(\d{6})", search_text)
+    if match:
+        order_code = f"DH{match.group(1)}"
+        order = db.query(Order).filter(Order.order_code == order_code).first()
+
+    # Cách 2: Nếu khách chuyển khoản quên gõ tiền tố 'DH' (chỉ gõ 6 chữ số)
     if not order:
-        return {"success": True, "message": f"Không tìm thấy đơn hàng {order_code}"}
+        six_digit_candidates = re.findall(r"\b(\d{6})\b", search_text)
+        for num in six_digit_candidates:
+            cand_code = f"DH{num}"
+            cand_order = db.query(Order).filter(
+                Order.order_code == cand_code,
+                Order.status == "pending"
+            ).first()
+            if cand_order and float(cand_order.price) == float(transfer_amount):
+                order = cand_order
+                order_code = cand_code
+                logger.info(f"[SePay Auto-Detect] Tìm thấy đơn hàng pending {order_code} theo 6 số: {num} và số tiền {transfer_amount}")
+                break
+
+    # 3. Kiểm tra nếu không tìm thấy đơn hàng
+    if not order:
+        return {"success": True, "message": f"Nội dung chuyển khoản không khớp đơn hàng hợp lệ: '{content}'"}
 
     customer = order.user
     customer_zalo_id = customer.user_id if customer else str(order.user_id)
@@ -384,7 +433,7 @@ def process_sepay_payment(db: Session, content: str, transfer_amount: Decimal, t
                 f"ℹ️ Trạng thái: Đơn #{order_code} trước đó đã được xử lý ({order.status}).\n\n"
                 f"✅ Bot đã TỰ ĐỘNG NẠP {int(transfer_amount):,} VNĐ VÀO SỐ DƯ VÍ của bạn!\n"
                 f"💼 Số dư ví hiện tại: {int(customer.balance):,} VNĐ\n\n"
-                f"👉 Bạn có thể soạn lệnh mua (Ví dụ: 'BUY 6' hoặc '1') để mua dịch vụ mới bằng số dư ví mà không cần chuyển khoản nữa nhé! ✨"
+                f"👉 Bạn có thể soạn lệnh mua: 'BUY <mã>' để mua dịch vụ mới bằng số dư ví mà không cần chuyển khoản nữa nhé! ✨"
             )
             send_zalo_message(customer_zalo_id, double_msg)
 
